@@ -1,0 +1,55 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add a wake profile",
+        "description": "Each profile drives one person's lamp (and optionally a speaker). Repeat to add more people.",
+        "data": {
+          "name": "Profile name (e.g. Chris)",
+          "light": "Bedside lamp",
+          "speaker": "Speaker (optional)",
+          "notify": "Notify service (optional, e.g. notify.mobile_app_phone)",
+          "alarm_sensor": "Phone 'Next alarm' sensor (optional)"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "A profile with that name already exists."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Wake profile settings",
+        "data": {
+          "lead_min": "Lead (minutes before alarm)",
+          "ramp_min": "Sunrise duration (minutes)",
+          "brightness_max": "Max brightness (%)",
+          "kelvin_start": "Start colour temperature (K, warmest)",
+          "kelvin_end": "End colour temperature (K, coolest)",
+          "audio": "Audio media id / URL (optional)",
+          "audio_type": "Audio type",
+          "audio_delay_min": "Audio delay after lights (minutes)",
+          "volume_max": "Max volume (0-1)",
+          "snooze_min": "Snooze duration (minutes)",
+          "snooze_max": "Max snooze attempts",
+          "window_start": "Morning window start",
+          "window_end": "Morning window end"
+        }
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {"active": {"name": "Active"}},
+    "sensor": {
+      "effective_alarm": {"name": "Effective alarm"},
+      "start_time": {"name": "Routine starts"}
+    },
+    "switch": {"enabled": {"name": "Enabled"}},
+    "button": {
+      "snooze": {"name": "Snooze"},
+      "dismiss": {"name": "Dismiss"},
+      "stop": {"name": "Stop"}
+    }
+  }
+}

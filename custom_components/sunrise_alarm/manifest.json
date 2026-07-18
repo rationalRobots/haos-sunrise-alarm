@@ -1,0 +1,12 @@
+{
+  "domain": "sunrise_alarm",
+  "name": "Sunrise Alarm",
+  "codeowners": ["@rationalRobots"],
+  "config_flow": true,
+  "documentation": "https://github.com/rationalRobots/haos-sunrise-alarm",
+  "integration_type": "service",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/rationalRobots/haos-sunrise-alarm/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}

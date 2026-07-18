@@ -1,0 +1,38 @@
+start:
+  name: Start
+  description: Start the sunrise wake routine for a profile immediately.
+  fields:
+    entry_id:
+      name: Profile (entry id)
+      description: The config entry id of the Sunrise Alarm profile.
+      required: true
+      example: 1a2b3c4d5e6f
+      selector:
+        text:
+snooze:
+  name: Snooze
+  description: Snooze the running routine for the profile.
+  fields:
+    entry_id:
+      name: Profile (entry id)
+      required: true
+      selector:
+        text:
+dismiss:
+  name: Dismiss
+  description: Dismiss the routine; leaves the lamp on and stops audio.
+  fields:
+    entry_id:
+      name: Profile (entry id)
+      required: true
+      selector:
+        text:
+stop:
+  name: Stop
+  description: Hard stop; lamp off, audio off, everything cancelled.
+  fields:
+    entry_id:
+      name: Profile (entry id)
+      required: true
+      selector:
+        text:

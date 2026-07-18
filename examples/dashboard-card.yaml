@@ -1,0 +1,38 @@
+# Example Lovelace card for one profile.
+# Replace <PROFILE> with your profile's slug (e.g. chris) as it appears in the
+# entity ids Home Assistant created.
+type: vertical-stack
+cards:
+  - type: entities
+    title: Sunrise Alarm
+    entities:
+      - entity: switch.<PROFILE>_enabled
+      - entity: sensor.<PROFILE>_effective_alarm
+      - entity: sensor.<PROFILE>_routine_starts
+      - entity: binary_sensor.<PROFILE>_active
+  - type: horizontal-stack
+    cards:
+      - type: button
+        name: Snooze
+        icon: mdi:alarm-snooze
+        tap_action:
+          action: perform-action
+          perform_action: button.press
+          target:
+            entity_id: button.<PROFILE>_snooze
+      - type: button
+        name: Dismiss
+        icon: mdi:alarm-off
+        tap_action:
+          action: perform-action
+          perform_action: button.press
+          target:
+            entity_id: button.<PROFILE>_dismiss
+      - type: button
+        name: Stop
+        icon: mdi:stop-circle
+        tap_action:
+          action: perform-action
+          perform_action: button.press
+          target:
+            entity_id: button.<PROFILE>_stop
