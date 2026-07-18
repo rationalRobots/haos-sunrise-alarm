@@ -1,6 +1,5 @@
 {
   "name": "Sunrise Alarm",
-  "content_in_root": false,
-  "render_readme": true,
-  "homeassistant": "2024.4.0"
+  "homeassistant": "2024.4.0",
+  "render_readme": true
 }

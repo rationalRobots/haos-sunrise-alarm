@@ -14,14 +14,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: home-assistant/actions/hassfest@master
 
-  hacs:
-    name: HACS
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: hacs/action@main
-        with:
-          category: integration
+  # NOTE: The HACS publish-validation job (hacs/action) was removed. It only works
+  # on PUBLIC repos: its integration_manifest/hacsjson checks fetch files from
+  # raw.githubusercontent.com, which returns nothing for a private repo, so the job
+  # can never pass here (and integration_manifest is not ignorable). This repo is
+  # private and installed as a HACS *custom* repository, which does not require
+  # passing hacs/action. hassfest below still validates the manifest. If this repo
+  # is ever made public to publish via the HACS default store, restore the job and
+  # add a description, topics, and brand assets.
 
   python:
     name: Byte-compile
