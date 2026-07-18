@@ -1,0 +1,37 @@
+name: Release
+
+# Cuts a GitHub Release whenever the integration's version changes on main.
+# HACS reads *releases* (not bare tags) to offer an update, so bumping
+# "version" in manifest.json and pushing is all that's needed.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "custom_components/sunrise_alarm/manifest.json"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read version from manifest
+        id: v
+        run: |
+          VERSION=$(python3 -c "import json;print(json.load(open('custom_components/sunrise_alarm/manifest.json'))['version'])")
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Create release if the tag is new
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.v.outputs.tag }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; nothing to do."
+          else
+            gh release create "$TAG" --title "$TAG" --generate-notes
+          fi
