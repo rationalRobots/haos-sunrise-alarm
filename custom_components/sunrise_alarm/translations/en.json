@@ -3,12 +3,19 @@
     "step": {
       "user": {
         "title": "Add a wake profile",
-        "description": "Each profile drives one person's lamp (and optionally a speaker). Repeat to add more people.",
+        "description": "Pick the person and their bedside lamp. Their phone's notify service and Companion sensors (next alarm, DND, phone state) are detected automatically. Repeat to add more people.",
         "data": {
-          "name": "Profile name (e.g. Chris)",
+          "person": "Person",
+          "name": "Profile name (optional; defaults to the person)",
           "light": "Bedside lamp",
-          "speaker": "Speaker (optional)",
-          "notify": "Notify service (optional, e.g. notify.mobile_app_phone)",
+          "speaker": "Speaker (optional)"
+        }
+      },
+      "manual": {
+        "title": "Phone details",
+        "description": "No Companion phone was found for that person. Enter the notify service and next-alarm sensor manually, or leave blank to drive this profile from an automation.",
+        "data": {
+          "notify": "Notify service (e.g. notify.mobile_app_phone)",
           "alarm_sensor": "Phone 'Next alarm' sensor (optional)"
         }
       }
@@ -22,6 +29,10 @@
       "init": {
         "title": "Wake profile settings",
         "data": {
+          "light": "Bedside lamp",
+          "speaker": "Speaker (optional)",
+          "notify": "Notify service (e.g. notify.mobile_app_phone)",
+          "alarm_sensor": "Phone 'Next alarm' sensor (optional)",
           "lead_min": "Lead (minutes before alarm)",
           "ramp_min": "Sunrise duration (minutes)",
           "brightness_max": "Max brightness (%)",
@@ -33,6 +44,11 @@
           "volume_max": "Max volume (0-1)",
           "snooze_min": "Snooze duration (minutes)",
           "snooze_max": "Max snooze attempts",
+          "prealarm_lead_sec": "Pre-alarm heads-up (seconds before start)",
+          "dashboard_path": "Notification tap opens (dashboard path, e.g. /lovelace/0)",
+          "premute_sec": "Pre-mute the phone this many seconds before the alarm",
+          "escalate": "Escalate (lamp 100% + audio max) if the phone fires",
+          "failsafe_extra_min": "Failsafe un-mute this many minutes after snooze",
           "window_start": "Morning window start",
           "window_end": "Morning window end"
         }
@@ -40,7 +56,10 @@
     }
   },
   "entity": {
-    "binary_sensor": {"active": {"name": "Active"}},
+    "binary_sensor": {
+      "active": {"name": "Active"},
+      "dnd_override": {"name": "DND override active"}
+    },
     "sensor": {
       "effective_alarm": {"name": "Effective alarm"},
       "start_time": {"name": "Routine starts"}
