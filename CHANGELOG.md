@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.1] - 2026-07-18
+
+### Fixed
+- Import `DeviceInfo` from `homeassistant.helpers.device_registry` (the previous
+  `homeassistant.helpers.device_info` module does not exist and broke setup on
+  current Home Assistant).
+- Simplified `hacs.json` (dropped `content_in_root`).
+
+### Added
+- Auto-release workflow: bumping `version` in the manifest and pushing to `main`
+  cuts a matching GitHub Release so HACS offers the update.
+
 ## [0.1.0] - 2026-07-18
 
 Initial public preview.
