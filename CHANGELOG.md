@@ -4,6 +4,54 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-07-18
+
+### Added (person-centric setup)
+- Setup now starts by **picking a person**. Their phone's **notify service** and
+  Companion **sensors** (next alarm, DND, alarm volume, last/removed notification,
+  phone state) are inferred from the person's `mobile_app` device — wiring the
+  entire phone-side layer in one step. Falls back to a manual notify/alarm-sensor
+  step when a person has no Companion device.
+
+## [0.4.0] - 2026-07-18
+
+### Added (phone-side layer)
+- **Pre-mute + hold-retry**: mutes the phone `premute_sec` before the alarm and
+  keeps re-sending the mute across the window (the Companion command channel is
+  unreliable).
+- **DND override with snapshot/restore**: records the phone's prior DND mode and
+  alarm-stream volume before muting, and restores them exactly afterwards. State
+  is **persisted**, so a restart never leaves the phone silenced (restore on load).
+- **Phone-firing mirror**: the phone's own alarm firing mutes the phone + watch and
+  (optionally) escalates the HA wake (lamp 100% + audio max).
+- **Phone snooze mirror**: a phone snooze restores the phone and snoozes HA.
+- **Phone dismiss mirror**: dismissing on the phone stops the HA routine.
+- **Failsafe un-mute**: if still muted `snooze + failsafe_extra_min` after the alarm,
+  the phone is un-muted as a hard backstop.
+- **Call-through**: an incoming call during the override releases it if DND was off.
+- **DND-override binary sensor** for dashboards.
+
+## [0.3.0] - 2026-07-18
+
+### Added (notification parity)
+- **1-minute pre-alarm heads-up** with actionable **Snooze / Cancel** (configurable
+  `prealarm_lead_sec`).
+- **Actionable wake notification** with **Snooze / Dismiss** buttons.
+- **Deep-link**: tapping a notification opens a configurable dashboard path
+  (`dashboard_path`).
+- **Notification-action handler**: the Companion `mobile_app_notification_action`
+  events route back to snooze / dismiss / cancel, scoped per profile by entry id.
+
+## [0.2.0] - 2026-07-18
+
+### Added
+- Options flow now edits the **lamp, speaker, notify service and next-alarm sensor**
+  too, not just timings — so a profile created without a notify target (silent
+  wake notification) can be fixed without re-adding it.
+
+### Fixed
+- (Carried from 0.1.2, unreleased) Options flow 400 on HA 2026.7.
+
 ## [0.1.2] - 2026-07-18
 
 ### Fixed
