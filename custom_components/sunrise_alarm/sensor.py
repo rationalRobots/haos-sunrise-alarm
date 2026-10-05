@@ -56,3 +56,11 @@ class SunriseStartTimeSensor(SunriseAlarmEntity, SensorEntity):
     @property
     def native_value(self) -> datetime | None:
         return self._controller.start_time
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Explain the schedule: why a start was skipped, or that it began late."""
+        return {
+            "late_start": self._controller.late_start,
+            "last_skip_reason": self._controller.last_skip_reason,
+        }

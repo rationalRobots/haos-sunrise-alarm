@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] - 2026-10-05
+
+### Fixed
+- **Late start instead of a silent skip** ([#6](https://github.com/rationalRobots/haos-sunrise-alarm/issues/6)).
+  When the phone's single `next_alarm` slot is held by a non-clock alarm
+  (Samsung Routine, calendar) until inside the lead window, the real alarm
+  surfaces with less than `lead_min` to go and the computed start is already in
+  the past. Previously the timer was never armed and nothing ran, while the
+  phone-side layer still muted the phone. The routine now starts immediately
+  with the ramp cut to the time left (never longer than the configured
+  ramp, minimum 1 min). Manual `sunrise_alarm.start` runs no longer count as
+  the day's run.
+- Every early return that drops a scheduled start now logs a **warning** with
+  the reason. The `Routine starts` sensor gains `last_skip_reason` and
+  `late_start` attributes so the dashboard can show it too.
+- `last_run_date` is persisted, so a morning that already ran (or was
+  dismissed) is not re-run when Home Assistant restarts before the alarm.
+
 ## [0.5.0] - 2026-07-18
 
 ### Added (person-centric setup)
