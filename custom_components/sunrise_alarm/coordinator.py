@@ -86,12 +86,12 @@ from .const import (
     DEFAULT_VOLUME_MAX,
     DEFAULT_WINDOW_END,
     DEFAULT_WINDOW_START,
+    MIN_LATE_RAMP_MIN,
     DND_TOTAL_SILENCE,
     DND_VALID,
     EVENT_NOTIFICATION_ACTION,
     NOTIFY_TAG,
     SIGNAL_UPDATE,
-    MIN_LATE_RAMP_MIN,
     STEP_SECONDS,
     STORAGE_KEY,
     STORAGE_VERSION,
@@ -287,6 +287,7 @@ class SunriseAlarmController:
                 self._unsubs[key] = async_track_point_in_time(self.hass, handler, when)
 
         if self.start_time > now:
+            self.late_start = False
             arm("point", self.start_time, self._handle_start)
             arm("prealarm", self.prealarm_time, self._handle_prealarm)
         else:
@@ -314,10 +315,19 @@ class SunriseAlarmController:
             )
         self._signal()
 
-    def _skip(self, reason: str) -> None:
-        """Record and log why a computed start will not run."""
+    def _skip(self, reason: str, level: int = logging.WARNING) -> None:
+        """Record, log and publish why a computed start will not run."""
         self.last_skip_reason = reason
-        _LOGGER.warning("%s: not starting the wake routine: %s", self.name, reason)
+        _LOGGER.log(level, "%s: not starting the wake routine: %s", self.name, reason)
+        self._signal()
+
+    @callback
+    def _mark_run_today(self) -> None:
+        """Claim today synchronously so a second reschedule in the same loop
+        iteration cannot start a second run, then persist it."""
+        self._last_run_date = dt_util.now().strftime("%Y-%m-%d")
+        self._pstate["last_run_date"] = self._last_run_date
+        self.hass.async_create_task(self._persist())
 
     @callback
     def _maybe_late_start(self, now: datetime) -> None:
@@ -327,7 +337,7 @@ class SunriseAlarmController:
             # Alarm already fired; nothing sensible to ramp towards.
             return
         if not self.enabled:
-            self._skip("profile is disabled")
+            self._skip("profile is disabled", logging.INFO)
             return
         if self._suppress_next:
             self._skip("suppressed by a pre-alarm snooze/cancel")
@@ -336,7 +346,10 @@ class SunriseAlarmController:
             # Already running or ran today: a normal reschedule mid-run
             # (e.g. the sensor re-publishing). Not a skip.
             return
-        ramp_min = max(MIN_LATE_RAMP_MIN, int(remaining.total_seconds() // 60))
+        configured = int(self.opt(CONF_RAMP_MIN, DEFAULT_RAMP_MIN))
+        ramp_min = max(
+            MIN_LATE_RAMP_MIN, min(configured, int(remaining.total_seconds() // 60))
+        )
         _LOGGER.warning(
             "%s: alarm %s surfaced only %s before it fires (lead is %s min); "
             "starting now with a %d min ramp",
@@ -348,6 +361,7 @@ class SunriseAlarmController:
         )
         self.last_skip_reason = None
         self.late_start = True
+        self._mark_run_today()
         self.hass.async_create_task(self.async_start_run(ramp_min=ramp_min))
 
     def _session_live(self) -> bool:
@@ -376,10 +390,11 @@ class SunriseAlarmController:
         self._unsubs["point"] = None
         if self._suppress_next:
             self._suppress_next = False
+            self._skip("suppressed by a pre-alarm snooze/cancel")
             return
         today = dt_util.now().strftime("%Y-%m-%d")
         if not self.enabled:
-            self._skip("profile is disabled")
+            self._skip("profile is disabled", logging.INFO)
             return
         if self.active:
             self._skip("a run is already active")
@@ -389,6 +404,7 @@ class SunriseAlarmController:
             return
         self.last_skip_reason = None
         self.late_start = False
+        self._mark_run_today()
         self.hass.async_create_task(self.async_start_run())
 
     # -- the sunrise routine -------------------------------------------------
@@ -396,9 +412,6 @@ class SunriseAlarmController:
         await self._cancel_run()
         self._suppress_next = False
         self.active = True
-        self._last_run_date = dt_util.now().strftime("%Y-%m-%d")
-        self._pstate["last_run_date"] = self._last_run_date
-        await self._store.async_save(self._pstate)
         self._signal()
         ramp = ramp_min if ramp_min is not None else int(
             self.opt(CONF_RAMP_MIN, DEFAULT_RAMP_MIN)

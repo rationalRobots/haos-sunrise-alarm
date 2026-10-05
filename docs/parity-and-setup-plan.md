@@ -22,7 +22,7 @@ Legend: ✅ present · 🟡 partial · ❌ missing.
 | Read phone `next_alarm` | ✅ | Per-profile `alarm_sensor`. |
 | Source gate (clock-app package allowlist) | ✅ | In `_resolve_alarm()` — the key fix that stops calendar/Routine false-fires. |
 | Morning-window gate | ✅ | `window_start/end`. |
-| Once-per-day guard | 🟡 | In-memory `_last_run_date`; **resets on restart** (old package persisted it in `input_text`). |
+| Once-per-day guard | ✅ | `_last_run_date`, persisted in the profile's store since 0.5.1 (survives a restart). |
 | Manual mode (dashboard time instead of phone) | ❌ | No manual time input; integration only reads `alarm_sensor`. |
 
 ### Controls

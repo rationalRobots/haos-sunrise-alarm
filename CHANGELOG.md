@@ -13,7 +13,9 @@ All notable changes to this project are documented here. The format is based on
   surfaces with less than `lead_min` to go and the computed start is already in
   the past. Previously the timer was never armed and nothing ran, while the
   phone-side layer still muted the phone. The routine now starts immediately
-  with a ramp shortened to the time left (minimum 1 min).
+  with the ramp cut to the time left (never longer than the configured
+  ramp, minimum 1 min). Manual `sunrise_alarm.start` runs no longer count as
+  the day's run.
 - Every early return that drops a scheduled start now logs a **warning** with
   the reason. The `Routine starts` sensor gains `last_skip_reason` and
   `late_start` attributes so the dashboard can show it too.
