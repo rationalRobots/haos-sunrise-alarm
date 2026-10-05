@@ -91,6 +91,7 @@ from .const import (
     EVENT_NOTIFICATION_ACTION,
     NOTIFY_TAG,
     SIGNAL_UPDATE,
+    MIN_LATE_RAMP_MIN,
     STEP_SECONDS,
     STORAGE_KEY,
     STORAGE_VERSION,
@@ -120,6 +121,11 @@ class SunriseAlarmController:
         self.effective_alarm: datetime | None = None
         self.start_time: datetime | None = None
         self.prealarm_time: datetime | None = None
+        # Diagnostics surfaced on the "Routine starts" sensor: why the last
+        # computed start did not (or will not) run, and whether the current
+        # run began late with a shortened ramp.
+        self.last_skip_reason: str | None = None
+        self.late_start: bool = False
         self._run_task: asyncio.Task | None = None
         self._hold_task: asyncio.Task | None = None
         self._unsubs: dict[str, CALLBACK_TYPE | None] = {
@@ -171,6 +177,8 @@ class SunriseAlarmController:
         stored = await self._store.async_load()
         if isinstance(stored, dict):
             self._pstate.update(stored)
+        # Survives a restart so a dismissed morning is not re-run on boot.
+        self._last_run_date = self._pstate.get("last_run_date")
 
         sensor = self.opt(CONF_ALARM_SENSOR)
         if sensor:
@@ -278,8 +286,16 @@ class SunriseAlarmController:
             if when > now:
                 self._unsubs[key] = async_track_point_in_time(self.hass, handler, when)
 
-        arm("point", self.start_time, self._handle_start)
-        arm("prealarm", self.prealarm_time, self._handle_prealarm)
+        if self.start_time > now:
+            arm("point", self.start_time, self._handle_start)
+            arm("prealarm", self.prealarm_time, self._handle_prealarm)
+        else:
+            # The start is already behind us. This happens when the phone's
+            # single next_alarm slot was held by a non-clock alarm (Routine,
+            # calendar) until inside the lead window, so the real alarm only
+            # surfaced now. Dropping the run here is what #6 reported; instead,
+            # start immediately with whatever ramp time is left.
+            self._maybe_late_start(now)
         # Phone-side timers (only meaningful if a notify target exists).
         if self.opt(CONF_NOTIFY):
             premute = int(self.opt(CONF_PREMUTE_SEC, DEFAULT_PREMUTE_SEC))
@@ -297,6 +313,42 @@ class SunriseAlarmController:
                 self._handle_failsafe,
             )
         self._signal()
+
+    def _skip(self, reason: str) -> None:
+        """Record and log why a computed start will not run."""
+        self.last_skip_reason = reason
+        _LOGGER.warning("%s: not starting the wake routine: %s", self.name, reason)
+
+    @callback
+    def _maybe_late_start(self, now: datetime) -> None:
+        """Start now with a shortened ramp if the alarm is still ahead."""
+        remaining = self.effective_alarm - now
+        if remaining <= timedelta(0):
+            # Alarm already fired; nothing sensible to ramp towards.
+            return
+        if not self.enabled:
+            self._skip("profile is disabled")
+            return
+        if self._suppress_next:
+            self._skip("suppressed by a pre-alarm snooze/cancel")
+            return
+        if self._session_live():
+            # Already running or ran today: a normal reschedule mid-run
+            # (e.g. the sensor re-publishing). Not a skip.
+            return
+        ramp_min = max(MIN_LATE_RAMP_MIN, int(remaining.total_seconds() // 60))
+        _LOGGER.warning(
+            "%s: alarm %s surfaced only %s before it fires (lead is %s min); "
+            "starting now with a %d min ramp",
+            self.name,
+            self.effective_alarm.isoformat(timespec="minutes"),
+            str(remaining).split(".")[0],
+            self.opt(CONF_LEAD_MIN, DEFAULT_LEAD_MIN),
+            ramp_min,
+        )
+        self.last_skip_reason = None
+        self.late_start = True
+        self.hass.async_create_task(self.async_start_run(ramp_min=ramp_min))
 
     def _session_live(self) -> bool:
         """True if a run is active or already ran today (our morning window)."""
@@ -326,9 +378,17 @@ class SunriseAlarmController:
             self._suppress_next = False
             return
         today = dt_util.now().strftime("%Y-%m-%d")
-        if not self.enabled or self.active or self._last_run_date == today:
+        if not self.enabled:
+            self._skip("profile is disabled")
             return
-        self._last_run_date = today
+        if self.active:
+            self._skip("a run is already active")
+            return
+        if self._last_run_date == today:
+            self._skip("already ran today")
+            return
+        self.last_skip_reason = None
+        self.late_start = False
         self.hass.async_create_task(self.async_start_run())
 
     # -- the sunrise routine -------------------------------------------------
@@ -336,6 +396,9 @@ class SunriseAlarmController:
         await self._cancel_run()
         self._suppress_next = False
         self.active = True
+        self._last_run_date = dt_util.now().strftime("%Y-%m-%d")
+        self._pstate["last_run_date"] = self._last_run_date
+        await self._store.async_save(self._pstate)
         self._signal()
         ramp = ramp_min if ramp_min is not None else int(
             self.opt(CONF_RAMP_MIN, DEFAULT_RAMP_MIN)
