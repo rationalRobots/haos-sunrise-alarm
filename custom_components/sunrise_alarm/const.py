@@ -51,6 +51,9 @@ DEFAULT_CLOCK_PACKAGES: Final = [
 
 # Ramp granularity (seconds between steps).
 STEP_SECONDS: Final = 20
+# Shortest ramp used when the alarm surfaces inside the lead window and the
+# routine has to start late (see _maybe_late_start).
+MIN_LATE_RAMP_MIN: Final = 1
 
 # Dispatcher signal used to notify entities of a controller state change.
 SIGNAL_UPDATE: Final = "sunrise_alarm_update_{entry_id}"

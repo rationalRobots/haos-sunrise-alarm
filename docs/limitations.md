@@ -14,8 +14,13 @@ backstop.
 `next_alarm` only ever holds the single soonest alarm from any app. A non-clock
 alarm (calendar/Routine) scheduled inside the lead window, in front of the real
 wake alarm, hides the real one during the minutes the routine needed to arm.
-Mornings rarely carry such alarms in that window, but it is a real edge case that
-no amount of source-gating removes.
+No amount of source-gating removes this, and in practice a weekday Routine
+can sit exactly there every morning. Since 0.5.1 the routine copes: when the
+real alarm surfaces with the start already in the past, it starts at once with
+the ramp shortened to the time left, and logs a warning. The lamp still reaches
+full brightness at the alarm; you just get a shorter sunrise. The fix on the
+phone side is to move the masking Routine or calendar alert out of the
+`[alarm - lead, alarm)` window.
 
 ## Colour temperature
 The sunrise ramps `color_temp_kelvin` from the configured start to end. If a lamp

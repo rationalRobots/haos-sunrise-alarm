@@ -77,7 +77,8 @@ routine or automation at these to snooze/dismiss by voice or speaker.
   treat HA as the alarm and keep the phone as a backstop.
 - **Masking:** the sensor holds only the single soonest alarm, so a non-clock
   alarm scheduled *inside* the lead window in front of the real one can hide it.
-  Rare, but real.
+  The routine then starts late with a shortened ramp (and logs a warning)
+  rather than skipping the morning.
 - **Phone muting / DND control** (silencing the phone as the wake takes over) is
   device-specific and not part of 0.1.0.
 
