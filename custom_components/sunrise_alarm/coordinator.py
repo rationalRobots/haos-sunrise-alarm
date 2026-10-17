@@ -25,9 +25,9 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     ACTION_CANCEL,
+    ACTION_DISMISS,
     ACTION_KEEP,
     ACTION_MORE,
-    ACTION_DISMISS,
     ACTION_SNOOZE,
     ACTION_SNOOZE_FOR,
     ACTION_STOP_ASK,
@@ -174,6 +174,9 @@ class SunriseAlarmController:
             f"{ACTION_SNOOZE_FOR}_{n}_{eid}": n for n in SNOOZE_CHOICES
         }
         self._tag = NOTIFY_TAG.format(entry_id=eid)
+        # Menus and the stop confirmation live on their own tag so a timed-out
+        # confirmation never takes the main Snooze/More buttons with it.
+        self._tag_menu = f"{self._tag}_menu"
 
     # -- option access -------------------------------------------------------
     def opt(self, key: str, default=None):
@@ -198,8 +201,10 @@ class SunriseAlarmController:
         stored = await self._store.async_load()
         if isinstance(stored, dict):
             self._pstate.update(stored)
-        # Survives a restart so a dismissed morning is not re-run on boot.
+        # Both survive a restart: a dismissed morning is not re-run on boot,
+        # and a 'stop for today' keeps the phone layer stood down.
         self._last_run_date = self._pstate.get("last_run_date")
+        self._stopped_date = self._pstate.get("stopped_date")
 
         sensor = self.opt(CONF_ALARM_SENSOR)
         if sensor:
@@ -518,6 +523,9 @@ class SunriseAlarmController:
         snooze chosen while already snoozing just replaces the timer and does
         not count against `snooze_max`.
         """
+        if self.stopped_today:
+            _LOGGER.info("%s: snooze ignored, wake stopped for today", self.name)
+            return
         snooze_min = minutes or int(self.opt(CONF_SNOOZE_MIN, DEFAULT_SNOOZE_MIN))
         if not self.active:
             await self._prealarm_snooze(snooze_min)
@@ -528,10 +536,10 @@ class SunriseAlarmController:
         snooze_max = int(self.opt(CONF_SNOOZE_MAX, DEFAULT_SNOOZE_MAX))
         if not replacing:
             self.snooze_count += 1
-        await self._quiet(fade=True)
         if self.snooze_count > snooze_max:
             await self.async_dismiss()
             return
+        await self._quiet(fade=True)
         self._signal()
         await self._notify_main(
             title=None,
@@ -591,6 +599,8 @@ class SunriseAlarmController:
         """
         today = dt_util.now().strftime("%Y-%m-%d")
         self._stopped_date = today
+        self._pstate["stopped_date"] = today
+        await self._persist()
         self._suppress_next = False
         for key in ("point", "prealarm", "premute", "firing", "failsafe"):
             self._cancel_timer(key)
@@ -607,12 +617,19 @@ class SunriseAlarmController:
         await self.async_restore_phone()
         _LOGGER.info("%s: wake stopped for today by the person", self.name)
         self._last_main = None
+        await self._notify_clear(self._tag_menu)
         await self._notify(
             message="Stopped for today. Lights and music off; your phone alarm will still ring."
         )
         self._signal()
 
     async def async_dismiss(self) -> None:
+        if not self.active:
+            # "I'm up" before the routine started: the pending start must not
+            # pull the lamp back down to 1% a minute later.
+            self._cancel_timer("point")
+            self._suppress_next = False
+            self._mark_run_today()
         self._cancel_snooze()
         await self._cancel_run()
         await self._cancel_hold()
@@ -855,6 +872,11 @@ class SunriseAlarmController:
     # -- notification action routing -----------------------------------------
     async def _handle_action(self, event: Event) -> None:
         action = event.data.get("action")
+        if action not in (self._actions["more"], self._actions["stop_ask"]) and (
+            action in self._snooze_actions or action in self._actions.values()
+        ):
+            # Any choice resolves the menu / confirmation.
+            await self._notify_clear(self._tag_menu)
         if action in self._snooze_actions:
             await self.async_snooze(self._snooze_actions[action])
         elif action == self._actions["snooze"]:
@@ -901,6 +923,7 @@ class SunriseAlarmController:
                 {"action": self._actions["dismiss"], "title": "Dismiss, I'm up"},
                 {"action": self._actions["stop_ask"], "title": "Stop for today…"},
             ],
+            tag=self._tag_menu,
         )
 
     async def _notify_stop_ask(self) -> None:
@@ -912,17 +935,16 @@ class SunriseAlarmController:
                 {"action": self._actions["keep"], "title": "Keep going"},
                 {"action": self._actions["stop_confirm"], "title": "Yes, stop today"},
             ],
+            tag=self._tag_menu,
             timeout=STOP_CONFIRM_TIMEOUT_SEC,
         )
 
     async def _notify_keep(self) -> None:
-        """Back out of a menu: restore the main notification."""
-        if self._last_main is not None:
-            await self._notify_main(*self._last_main)
-        else:
-            await self._notify_clear()
+        """Back out: the menu is already cleared; the main notification stays."""
+        if self._last_main is None:
+            await self._notify_clear(self._tag)
 
-    async def _notify_clear(self) -> None:
+    async def _notify_clear(self, tag: str) -> None:
         target = self.opt(CONF_NOTIFY)
         if not target or "." not in target:
             return
@@ -931,7 +953,7 @@ class SunriseAlarmController:
             await self.hass.services.async_call(
                 "notify",
                 service,
-                {"message": "clear_notification", "data": {"tag": self._tag}},
+                {"message": "clear_notification", "data": {"tag": tag}},
                 blocking=False,
             )
         except Exception as err:  # noqa: BLE001
@@ -958,6 +980,7 @@ class SunriseAlarmController:
         title: str | None = None,
         actions: list[dict] | None = None,
         timeout: int | None = None,
+        tag: str | None = None,
     ) -> None:
         target = self.opt(CONF_NOTIFY)
         if not target or "." not in target:
@@ -966,7 +989,10 @@ class SunriseAlarmController:
         payload: dict = {"message": message}
         if title:
             payload["title"] = title
-        ndata: dict = {"tag": self._tag}
+        ndata: dict = {"tag": tag or self._tag}
+        if tag and tag != self._tag:
+            # Menu steps replace each other; don't re-alert on every tap.
+            ndata["alert_once"] = True
         dashboard = self.opt(CONF_DASHBOARD, DEFAULT_DASHBOARD)
         if dashboard:
             ndata["clickAction"] = dashboard

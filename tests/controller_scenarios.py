@@ -91,10 +91,31 @@ async def scheduling():
     print("scheduling: ok")
 
 
+class Gate:
+    """Replace asyncio.sleep: long sleeps wait on an event the test opens."""
+
+    def __init__(self):
+        self.event = asyncio.Event()
+        self.real = asyncio.sleep
+
+    async def __call__(self, seconds):
+        if seconds >= 60:
+            await self.event.wait()
+        else:
+            await self.real(0)
+
+    async def release(self):
+        self.event.set()
+        for _ in range(5):
+            await self.real(0)
+        self.event = asyncio.Event()
+
+
 async def notifications():
     now = dt_util.now().replace(microsecond=0)
+    gate = Gate()
     with patch.object(co, "async_track_point_in_time", return_value=lambda: None), \
-         patch.object(co.asyncio, "sleep", AsyncMock()):
+         patch.object(co.asyncio, "sleep", gate):
         c = make({}, (now + timedelta(minutes=40)).isoformat())
         c._reschedule()
         # Start a run: main notification has Snooze 10 / Snooze 20 / More
@@ -112,11 +133,14 @@ async def notifications():
         n = calls(c, "notify")[-1]
         titles = [a["title"] for a in n["data"]["actions"]]
         assert titles == ["Keep going", "Yes, stop today"], titles
-        assert n["data"]["timeout"] == 60, n
-        # Keep -> main notification restored, still active
+        assert n["data"]["timeout"] == 60 and n["data"]["alert_once"] is True, n
+        assert n["data"]["tag"].endswith("_menu"), n
+        # Keep -> only the menu is cleared; main notification untouched, still active
+        c.hass.services.async_call.reset_mock()
         await action(c, c._actions["keep"])
-        titles = [a["title"] for a in calls(c, "notify")[-1]["data"]["actions"]]
-        assert titles[0] == "Snooze 10" and c.active, titles
+        clears = [d for d in calls(c, "notify") if d["message"] == "clear_notification"]
+        assert len(clears) == 1 and clears[0]["data"]["tag"].endswith("_menu"), clears
+        assert len(calls(c, "notify")) == 1 and c.active
         # Snooze 20 -> run cancelled, music paused, lamp fades over 45 s, count 1
         c.hass.services.async_call.reset_mock()
         await action(c, f"{co.ACTION_SNOOZE_FOR}_20_e1")
@@ -128,6 +152,12 @@ async def notifications():
         # Snooze 30 while snoozing -> replaces, count unchanged
         await action(c, f"{co.ACTION_SNOOZE_FOR}_30_e1")
         assert c.snooze_count == 1, c.snooze_count
+        # Let the snooze timer run out -> short re-ramp
+        c.hass.services.async_call.reset_mock()
+        await gate.release()
+        assert c._snooze_task is None and c.active
+        assert "Sunrise wake starting" in calls(c, "notify")[-1]["message"]
+        assert c._run_task is not None
         # Stop confirm -> stopped today, everything down, phone layer stood down
         c.hass.services.async_call.reset_mock()
         await action(c, c._actions["stop_confirm"])
@@ -137,11 +167,15 @@ async def notifications():
         assert calls(c, "media_player", "turn_off"), "speaker not turned off"
         assert calls(c, "light", "turn_off")[0].get("transition") == 45
         assert "Stopped for today" in calls(c, "notify")[-1]["message"]
+        assert c._pstate.get("stopped_date") == c._stopped_date, "stop not persisted"
         # A reschedule later that day must not start anything
         c.async_start_run = AsyncMock()
         c.hass.states.get.return_value.state = (now + timedelta(minutes=20)).isoformat()
         c._reschedule(); await asyncio.sleep(0)
         assert c.async_start_run.await_count == 0
+        # A stray snooze after stop must not arm a pre-alarm snooze for tomorrow
+        await c.async_snooze(10)
+        assert c._snooze_task is None and not c._suppress_next
         # Legacy pre-alarm Cancel routes to the confirmation, not a stop
         c2 = make({}, (now + timedelta(minutes=40)).isoformat())
         await action(c2, c2._actions["cancel"])
@@ -155,6 +189,18 @@ async def notifications():
         await action(c3, c3._actions["dismiss"])
         assert c3._snooze_task is None and not c3.active
         assert calls(c3, "light", "turn_on")[-1].get("brightness_pct") == 100
+        c3.async_start_run = AsyncMock()
+        await gate.release()
+        assert c3.async_start_run.await_count == 0, "snooze restarted after dismiss"
+        # Dismiss on the pre-alarm notification cancels the pending start
+        c4 = make({}, (now + timedelta(minutes=40)).isoformat())
+        c4._reschedule()
+        assert c4._unsubs["point"] is not None
+        await action(c4, c4._actions["dismiss"])
+        assert c4._unsubs["point"] is None and c4._last_run_date == now.strftime("%Y-%m-%d")
+        c4.async_start_run = AsyncMock()
+        c4._handle_start(now); await asyncio.sleep(0)
+        assert c4.async_start_run.await_count == 0 and c4.last_skip_reason == "already ran today"
     print("notifications: ok")
 
 

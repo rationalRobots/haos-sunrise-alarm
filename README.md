@@ -74,7 +74,9 @@ Stop today's wake?  (clears itself after 60 s and does nothing)
 ```
 
 Snooze stops the music at once and fades the lamp down over `snooze_fade_sec`
-(default 45 s); choosing another snooze while snoozing just replaces the timer.
+(default 45 s, for lamps that support transitions); choosing another snooze
+while snoozing just replaces the timer. The menu and confirmation use their own
+notification, so if the confirmation times out your Snooze buttons are still there.
 *Stop for today* turns the lamp and speaker off, restores the phone, stands the
 phone-side layer down (no pre-mute, no escalate) and blocks any further start
 that day. Your phone alarm still rings as the backstop.
