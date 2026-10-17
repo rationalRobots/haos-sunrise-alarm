@@ -26,7 +26,12 @@ from homeassistant.util import dt as dt_util
 from .const import (
     ACTION_CANCEL,
     ACTION_DISMISS,
+    ACTION_KEEP,
+    ACTION_MORE,
     ACTION_SNOOZE,
+    ACTION_SNOOZE_FOR,
+    ACTION_STOP_ASK,
+    ACTION_STOP_CONFIRM,
     ALARM_STREAM,
     CMD_DND,
     CMD_VOLUME,
@@ -57,6 +62,7 @@ from .const import (
     CONF_PREMUTE_SEC,
     CONF_RAMP_MIN,
     CONF_SNOOZED_CHANNEL,
+    CONF_SNOOZE_FADE_SEC,
     CONF_SNOOZE_MAX,
     CONF_SNOOZE_MIN,
     CONF_SPEAKER,
@@ -81,6 +87,7 @@ from .const import (
     DEFAULT_PREMUTE_SEC,
     DEFAULT_RAMP_MIN,
     DEFAULT_SNOOZED_CHANNEL,
+    DEFAULT_SNOOZE_FADE_SEC,
     DEFAULT_SNOOZE_MAX,
     DEFAULT_SNOOZE_MIN,
     DEFAULT_VOLUME_MAX,
@@ -92,7 +99,9 @@ from .const import (
     EVENT_NOTIFICATION_ACTION,
     NOTIFY_TAG,
     SIGNAL_UPDATE,
+    SNOOZE_CHOICES,
     STEP_SECONDS,
+    STOP_CONFIRM_TIMEOUT_SEC,
     STORAGE_KEY,
     STORAGE_VERSION,
 )
@@ -127,6 +136,16 @@ class SunriseAlarmController:
         self.last_skip_reason: str | None = None
         self.late_start: bool = False
         self._run_task: asyncio.Task | None = None
+        self._snooze_task: asyncio.Task | None = None
+        # Serialises snooze/dismiss/stop so two fast taps cannot interleave
+        # around their awaits and leave an untracked timer behind.
+        self._op_lock = asyncio.Lock()
+        # Phone-side workers (pre-mute, firing) so a stop can cancel them.
+        self._phone_tasks: set[asyncio.Task] = set()
+        # Date (YYYY-MM-DD) on which the person chose 'stop for today'.
+        self._stopped_date: str | None = None
+        # Last main notification, re-sent when a menu is backed out of.
+        self._last_main: tuple[str | None, str] | None = None
         self._hold_task: asyncio.Task | None = None
         self._unsubs: dict[str, CALLBACK_TYPE | None] = {
             "state": None,
@@ -151,8 +170,18 @@ class SunriseAlarmController:
             "snooze": f"{ACTION_SNOOZE}_{eid}",
             "dismiss": f"{ACTION_DISMISS}_{eid}",
             "cancel": f"{ACTION_CANCEL}_{eid}",
+            "more": f"{ACTION_MORE}_{eid}",
+            "stop_ask": f"{ACTION_STOP_ASK}_{eid}",
+            "stop_confirm": f"{ACTION_STOP_CONFIRM}_{eid}",
+            "keep": f"{ACTION_KEEP}_{eid}",
+        }
+        self._snooze_actions = {
+            f"{ACTION_SNOOZE_FOR}_{n}_{eid}": n for n in SNOOZE_CHOICES
         }
         self._tag = NOTIFY_TAG.format(entry_id=eid)
+        # Menus and the stop confirmation live on their own tag so a timed-out
+        # confirmation never takes the main Snooze/More buttons with it.
+        self._tag_menu = f"{self._tag}_menu"
 
     # -- option access -------------------------------------------------------
     def opt(self, key: str, default=None):
@@ -177,8 +206,10 @@ class SunriseAlarmController:
         stored = await self._store.async_load()
         if isinstance(stored, dict):
             self._pstate.update(stored)
-        # Survives a restart so a dismissed morning is not re-run on boot.
+        # Both survive a restart: a dismissed morning is not re-run on boot,
+        # and a 'stop for today' keeps the phone layer stood down.
         self._last_run_date = self._pstate.get("last_run_date")
+        self._stopped_date = self._pstate.get("stopped_date")
 
         sensor = self.opt(CONF_ALARM_SENSOR)
         if sensor:
@@ -216,7 +247,9 @@ class SunriseAlarmController:
             if unsub:
                 unsub()
                 self._unsubs[key] = None
+        self._cancel_snooze()
         await self._cancel_run()
+        await self._cancel_phone_tasks()
         await self._cancel_hold()
 
     # -- alarm resolution (the source gate) ----------------------------------
@@ -342,6 +375,9 @@ class SunriseAlarmController:
         if self._suppress_next:
             self._skip("suppressed by a pre-alarm snooze/cancel")
             return
+        if self.stopped_today:
+            self._skip("stopped for today", logging.INFO)
+            return
         if self._session_live():
             # Already running or ran today: a normal reschedule mid-run
             # (e.g. the sensor re-publishing). Not a skip.
@@ -364,24 +400,36 @@ class SunriseAlarmController:
         self._mark_run_today()
         self.hass.async_create_task(self.async_start_run(ramp_min=ramp_min))
 
+    @property
+    def stopped_today(self) -> bool:
+        """True once the person has chosen 'stop for today'."""
+        return self._stopped_date == dt_util.now().strftime("%Y-%m-%d")
+
     def _session_live(self) -> bool:
-        """True if a run is active or already ran today (our morning window)."""
+        """True if a run is active or already ran today, and was not stopped.
+
+        The phone-side timers key off this, so a deliberate stop stands them
+        down too: the phone alarm then rings as the normal backstop.
+        """
+        if self.stopped_today:
+            return False
         today = dt_util.now().strftime("%Y-%m-%d")
         return self.active or self._last_run_date == today
 
     @callback
     def _handle_prealarm(self, _now: datetime) -> None:
         self._unsubs["prealarm"] = None
-        if not self.enabled or self.active or self._suppress_next:
+        if (
+            not self.enabled
+            or self.active
+            or self._suppress_next
+            or self.stopped_today
+        ):
             return
         self.hass.async_create_task(
-            self._notify(
+            self._notify_main(
                 title=f"Alarm soon, {self.name}",
                 message="Your wake routine is about to start.",
-                actions=[
-                    {"action": self._actions["snooze"], "title": "Snooze"},
-                    {"action": self._actions["cancel"], "title": "Cancel"},
-                ],
             )
         )
 
@@ -398,6 +446,9 @@ class SunriseAlarmController:
             return
         if self.active:
             self._skip("a run is already active")
+            return
+        if self.stopped_today:
+            self._skip("stopped for today")
             return
         if self._last_run_date == today:
             self._skip("already ran today")
@@ -416,13 +467,8 @@ class SunriseAlarmController:
         ramp = ramp_min if ramp_min is not None else int(
             self.opt(CONF_RAMP_MIN, DEFAULT_RAMP_MIN)
         )
-        await self._notify(
-            title=f"Good morning, {self.name}",
-            message="Sunrise wake starting.",
-            actions=[
-                {"action": self._actions["snooze"], "title": "Snooze"},
-                {"action": self._actions["dismiss"], "title": "Dismiss"},
-            ],
+        await self._notify_main(
+            title=f"Good morning, {self.name}", message="Sunrise wake starting."
         )
         self._run_task = self.hass.async_create_task(self._async_sunrise(ramp))
 
@@ -476,45 +522,137 @@ class SunriseAlarmController:
             await self._call("media_player", "volume_set", speaker, volume_level=vol)
             await asyncio.sleep(STEP_SECONDS)
 
-    async def async_snooze(self) -> None:
-        if not self.active:
-            await self._prealarm_snooze()
+    async def async_snooze(self, minutes: int | None = None) -> None:
+        """Snooze for `minutes` (default `snooze_min`).
+
+        Music stops at once; the lamp fades down over `snooze_fade_sec`. A
+        snooze chosen while already snoozing just replaces the timer and does
+        not count against `snooze_max`.
+        """
+        if self.stopped_today:
+            _LOGGER.info("%s: snooze ignored, wake stopped for today", self.name)
             return
-        await self._cancel_run()
-        self.snooze_count += 1
-        snooze_min = int(self.opt(CONF_SNOOZE_MIN, DEFAULT_SNOOZE_MIN))
-        snooze_max = int(self.opt(CONF_SNOOZE_MAX, DEFAULT_SNOOZE_MAX))
-        light = self.opt(CONF_LIGHT)
-        speaker = self.opt(CONF_SPEAKER)
-        if light:
-            await self._call("light", "turn_off", light)
-        if speaker:
-            await self._call("media_player", "media_pause", speaker)
-        if self.snooze_count > snooze_max:
-            await self.async_dismiss()
-            return
-        self._signal()
-        await self._notify(
-            message=f"Snoozing {snooze_min} min ({self.snooze_count}/{snooze_max})."
-        )
-        await asyncio.sleep(snooze_min * 60)
-        if self.active:
+        snooze_min = minutes or int(self.opt(CONF_SNOOZE_MIN, DEFAULT_SNOOZE_MIN))
+        async with self._op_lock:
+            if self.stopped_today:
+                return
+            if not self.active:
+                await self._prealarm_snooze(snooze_min)
+                return
+            replacing = (
+                self._snooze_task is not None and not self._snooze_task.done()
+            )
+            self._cancel_snooze()
+            await self._cancel_run()
+            snooze_max = int(self.opt(CONF_SNOOZE_MAX, DEFAULT_SNOOZE_MAX))
+            if not replacing:
+                self.snooze_count += 1
+            if self.snooze_count > snooze_max:
+                await self._dismiss_locked()
+                return
+            await self._quiet(fade=True)
+            self._signal()
+            await self._notify_main(
+                title=None,
+                message=f"Snoozing {snooze_min} min ({self.snooze_count}/{snooze_max}).",
+            )
+            self._snooze_task = self.hass.async_create_task(
+                self._snooze_wait(snooze_min)
+            )
+
+    async def _snooze_wait(self, minutes: int) -> None:
+        await asyncio.sleep(minutes * 60)
+        self._snooze_task = None
+        if self.active and not self.stopped_today:
             await self.async_start_run(ramp_min=2)
 
-    async def _prealarm_snooze(self) -> None:
+    async def _prealarm_snooze(self, minutes: int) -> None:
+        """Snooze before the routine has started: delay the start."""
         self._suppress_next = True
-        snooze_min = int(self.opt(CONF_SNOOZE_MIN, DEFAULT_SNOOZE_MIN))
-        await self._notify(message=f"Wake snoozed. Back in {snooze_min} min.")
-        await asyncio.sleep(snooze_min * 60)
-        await self.async_start_run(ramp_min=2)
+        self._cancel_snooze()
+        await self._notify_main(
+            title=None, message=f"Wake snoozed. Back in {minutes} min."
+        )
+        self._snooze_task = self.hass.async_create_task(
+            self._prealarm_snooze_wait(minutes)
+        )
 
-    async def _prealarm_cancel(self) -> None:
-        self._suppress_next = True
-        self._cancel_timer("point")
-        await self.async_stop()
-        await self._notify(message="Wake cancelled.")
+    async def _prealarm_snooze_wait(self, minutes: int) -> None:
+        await asyncio.sleep(minutes * 60)
+        self._snooze_task = None
+        if not self.stopped_today and not self.active:
+            await self.async_start_run(ramp_min=2)
+
+    def _cancel_snooze(self) -> None:
+        task = self._snooze_task
+        self._snooze_task = None
+        if task and not task.done():
+            task.cancel()
+
+    async def _quiet(self, fade: bool) -> None:
+        """Music off now; lamp off, slowly if `fade`."""
+        light = self.opt(CONF_LIGHT)
+        speaker = self.opt(CONF_SPEAKER)
+        if speaker:
+            await self._call("media_player", "media_pause", speaker)
+        if light:
+            fade_sec = int(self.opt(CONF_SNOOZE_FADE_SEC, DEFAULT_SNOOZE_FADE_SEC))
+            if fade and fade_sec > 0:
+                await self._call("light", "turn_off", light, transition=fade_sec)
+            else:
+                await self._call("light", "turn_off", light)
+
+    async def async_stop_today(self) -> None:
+        """Deliberate stop: lights and music off, nothing more today.
+
+        Also stands the phone-side layer down (no pre-mute, no escalate, no
+        failsafe), so the phone alarm rings as the normal backstop.
+        """
+        async with self._op_lock:
+            await self._stop_today_locked()
+
+    async def _stop_today_locked(self) -> None:
+        today = dt_util.now().strftime("%Y-%m-%d")
+        self._stopped_date = today
+        self._pstate["stopped_date"] = today
+        await self._persist()
+        self._suppress_next = False
+        for key in ("point", "prealarm", "premute", "firing", "failsafe"):
+            self._cancel_timer(key)
+        self._cancel_snooze()
+        await self._cancel_run()
+        # Pre-mute / firing workers already dispatched must not mute the
+        # phone again (or escalate) after we restore it.
+        await self._cancel_phone_tasks()
+        await self._cancel_hold()
+        self.active = False
+        self.snooze_count = 0
+        self.late_start = False
+        await self._quiet(fade=True)
+        speaker = self.opt(CONF_SPEAKER)
+        if speaker:
+            await self._call("media_player", "turn_off", speaker)
+        await self.async_restore_phone()
+        _LOGGER.info("%s: wake stopped for today by the person", self.name)
+        self._last_main = None
+        await self._notify_clear(self._tag_menu)
+        await self._notify(
+            message="Stopped for today. Lights and music off; your phone alarm will still ring."
+        )
+        self._signal()
 
     async def async_dismiss(self) -> None:
+        async with self._op_lock:
+            await self._dismiss_locked()
+
+    async def _dismiss_locked(self) -> None:
+        if not self.active:
+            # "I'm up" before the routine started: the pending start must not
+            # pull the lamp back down to 1% a minute later.
+            self._cancel_timer("point")
+            self._suppress_next = False
+            self._mark_run_today()
+        self._cancel_snooze()
         await self._cancel_run()
         await self._cancel_hold()
         self.active = False
@@ -526,12 +664,16 @@ class SunriseAlarmController:
         if speaker:
             await self._call("media_player", "media_stop", speaker)
         await self.async_restore_phone()
+        self._last_main = None
         await self._notify(message=f"Alarm dismissed. Have a good day, {self.name}.")
         self._signal()
 
     async def async_stop(self) -> None:
-        await self._cancel_run()
-        await self._cancel_hold()
+        async with self._op_lock:
+            self._cancel_snooze()
+            await self._cancel_run()
+            await self._cancel_phone_tasks()
+            await self._cancel_hold()
         self.active = False
         self.snooze_count = 0
         light = self.opt(CONF_LIGHT)
@@ -542,6 +684,23 @@ class SunriseAlarmController:
             await self._call("light", "turn_off", light)
         await self.async_restore_phone()
         self._signal()
+
+    def _phone_task(self, coro) -> None:
+        """Run a phone-side worker and keep a handle so stop can cancel it."""
+        task = self.hass.async_create_task(coro)
+        self._phone_tasks.add(task)
+        task.add_done_callback(self._phone_tasks.discard)
+
+    async def _cancel_phone_tasks(self) -> None:
+        tasks = [t for t in self._phone_tasks if not t.done()]
+        self._phone_tasks.clear()
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     async def _cancel_run(self) -> None:
         task = self._run_task
@@ -671,10 +830,15 @@ class SunriseAlarmController:
         self._unsubs["premute"] = None
         if not self.enabled or self._suppress_next or not self._session_live():
             return
-        self.hass.async_create_task(self._premute())
+        self._phone_task(self._premute())
 
     async def _premute(self) -> None:
+        if self.stopped_today:
+            return
         await self.async_mute_phone()
+        if self.stopped_today:
+            await self.async_restore_phone()
+            return
         await self._start_hold()
 
     @callback
@@ -682,10 +846,15 @@ class SunriseAlarmController:
         self._unsubs["firing"] = None
         if not self.enabled or not self._session_live():
             return
-        self.hass.async_create_task(self._on_firing())
+        self._phone_task(self._on_firing())
 
     async def _on_firing(self) -> None:
+        if self.stopped_today:
+            return
         await self.async_mute_phone()
+        if self.stopped_today:
+            await self.async_restore_phone()
+            return
         await self._start_hold()
         self.active = True
         if self.opt(CONF_ESCALATE, DEFAULT_ESCALATE):
@@ -706,7 +875,7 @@ class SunriseAlarmController:
         firing_pkg = self.opt(CONF_FIRING_PACKAGE, DEFAULT_FIRING_PACKAGE)
         snoozed_ch = self.opt(CONF_SNOOZED_CHANNEL, DEFAULT_SNOOZED_CHANNEL)
         if channel == firing_ch and package == firing_pkg:
-            self.hass.async_create_task(self._on_firing())
+            self._phone_task(self._on_firing())
         elif channel == snoozed_ch:
             self.hass.async_create_task(self._on_phone_snooze())
 
@@ -754,12 +923,92 @@ class SunriseAlarmController:
     # -- notification action routing -----------------------------------------
     async def _handle_action(self, event: Event) -> None:
         action = event.data.get("action")
-        if action == self._actions["snooze"]:
+        if action not in (self._actions["more"], self._actions["stop_ask"]) and (
+            action in self._snooze_actions or action in self._actions.values()
+        ):
+            # Any choice resolves the menu / confirmation.
+            await self._notify_clear(self._tag_menu)
+        if action in self._snooze_actions:
+            await self.async_snooze(self._snooze_actions[action])
+        elif action == self._actions["snooze"]:
             await self.async_snooze()
         elif action == self._actions["dismiss"]:
             await self.async_dismiss()
-        elif action == self._actions["cancel"]:
-            await self._prealarm_cancel()
+        elif action == self._actions["more"]:
+            await self._notify_more()
+        elif action in (self._actions["stop_ask"], self._actions["cancel"]):
+            # Stop is deliberately two taps away from the main buttons.
+            await self._notify_stop_ask()
+        elif action == self._actions["stop_confirm"]:
+            await self.async_stop_today()
+        elif action == self._actions["keep"]:
+            await self._notify_keep()
+
+    # -- notification menus ---------------------------------------------------
+    def _snooze_action(self, minutes: int) -> dict:
+        eid = self.entry.entry_id
+        return {
+            "action": f"{ACTION_SNOOZE_FOR}_{minutes}_{eid}",
+            "title": f"Snooze {minutes}",
+        }
+
+    async def _notify_main(self, title: str | None, message: str) -> None:
+        """The main notification: two snoozes and a 'More' menu."""
+        self._last_main = (title, message)
+        await self._notify(
+            message,
+            title=title,
+            actions=[
+                self._snooze_action(SNOOZE_CHOICES[0]),
+                self._snooze_action(SNOOZE_CHOICES[1]),
+                {"action": self._actions["more"], "title": "More…"},
+            ],
+        )
+
+    async def _notify_more(self) -> None:
+        await self._notify(
+            "Longer snooze, up for the day, or stop.",
+            title="Wake options",
+            actions=[
+                self._snooze_action(SNOOZE_CHOICES[2]),
+                {"action": self._actions["dismiss"], "title": "Dismiss, I'm up"},
+                {"action": self._actions["stop_ask"], "title": "Stop for today…"},
+            ],
+            tag=self._tag_menu,
+        )
+
+    async def _notify_stop_ask(self) -> None:
+        """Confirmation step. Times out and does nothing if ignored."""
+        await self._notify(
+            "Lights and music off, no more today. Your phone alarm will still ring.",
+            title="Stop today's wake?",
+            actions=[
+                {"action": self._actions["keep"], "title": "Keep going"},
+                {"action": self._actions["stop_confirm"], "title": "Yes, stop today"},
+            ],
+            tag=self._tag_menu,
+            timeout=STOP_CONFIRM_TIMEOUT_SEC,
+        )
+
+    async def _notify_keep(self) -> None:
+        """Back out: the menu is already cleared; the main notification stays."""
+        if self._last_main is None:
+            await self._notify_clear(self._tag)
+
+    async def _notify_clear(self, tag: str) -> None:
+        target = self.opt(CONF_NOTIFY)
+        if not target or "." not in target:
+            return
+        _, service = target.split(".", 1)
+        try:
+            await self.hass.services.async_call(
+                "notify",
+                service,
+                {"message": "clear_notification", "data": {"tag": tag}},
+                blocking=False,
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.warning("%s: notify clear failed: %s", self.name, err)
 
     # -- service helpers -----------------------------------------------------
     async def _light(self, entity: str, bri_pct: int, kelvin: int, transition: int):
@@ -781,6 +1030,8 @@ class SunriseAlarmController:
         message: str,
         title: str | None = None,
         actions: list[dict] | None = None,
+        timeout: int | None = None,
+        tag: str | None = None,
     ) -> None:
         target = self.opt(CONF_NOTIFY)
         if not target or "." not in target:
@@ -789,12 +1040,17 @@ class SunriseAlarmController:
         payload: dict = {"message": message}
         if title:
             payload["title"] = title
-        ndata: dict = {"tag": self._tag}
+        ndata: dict = {"tag": tag or self._tag}
+        if tag and tag != self._tag:
+            # Menu steps replace each other; don't re-alert on every tap.
+            ndata["alert_once"] = True
         dashboard = self.opt(CONF_DASHBOARD, DEFAULT_DASHBOARD)
         if dashboard:
             ndata["clickAction"] = dashboard
         if actions:
             ndata["actions"] = actions
+        if timeout:
+            ndata["timeout"] = timeout
         payload["data"] = ndata
         try:
             await self.hass.services.async_call(

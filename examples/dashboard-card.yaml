@@ -36,3 +36,13 @@ cards:
           perform_action: button.press
           target:
             entity_id: button.<PROFILE>_stop
+      - type: button
+        name: Stop today
+        icon: mdi:cancel
+        hold_action:
+          action: perform-action
+          perform_action: button.press
+          target:
+            entity_id: button.<PROFILE>_stop_today
+        tap_action:
+          action: none
