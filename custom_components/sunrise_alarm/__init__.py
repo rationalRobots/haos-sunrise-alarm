@@ -15,6 +15,7 @@ from .const import (
     SERVICE_SNOOZE,
     SERVICE_START,
     SERVICE_STOP,
+    SERVICE_STOP_TODAY,
 )
 from .coordinator import SunriseAlarmController
 
@@ -73,12 +74,24 @@ def _async_register_services(hass: HomeAssistant) -> None:
     async def _stop(call: ServiceCall) -> None:
         await _controller(call).async_stop()
 
+    async def _stop_today(call: ServiceCall) -> None:
+        await _controller(call).async_stop_today()
+
     hass.services.async_register(DOMAIN, SERVICE_START, _start, schema=_SERVICE_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_SNOOZE, _snooze, schema=_SERVICE_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_DISMISS, _dismiss, schema=_SERVICE_SCHEMA)
     hass.services.async_register(DOMAIN, SERVICE_STOP, _stop, schema=_SERVICE_SCHEMA)
+    hass.services.async_register(
+        DOMAIN, SERVICE_STOP_TODAY, _stop_today, schema=_SERVICE_SCHEMA
+    )
 
 
 def _async_remove_services(hass: HomeAssistant) -> None:
-    for service in (SERVICE_START, SERVICE_SNOOZE, SERVICE_DISMISS, SERVICE_STOP):
+    for service in (
+        SERVICE_START,
+        SERVICE_SNOOZE,
+        SERVICE_DISMISS,
+        SERVICE_STOP,
+        SERVICE_STOP_TODAY,
+    ):
         hass.services.async_remove(DOMAIN, service)

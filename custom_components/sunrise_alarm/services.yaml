@@ -36,3 +36,12 @@ stop:
       required: true
       selector:
         text:
+stop_today:
+  name: Stop for today
+  description: Lamp and audio off, phone restored, and the routine will not run again today.
+  fields:
+    entry_id:
+      name: Profile (entry id)
+      required: true
+      selector:
+        text:

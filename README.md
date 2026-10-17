@@ -55,7 +55,29 @@ window that gates which alarms count.
 
 Each profile exposes: an **Enabled** switch, an **Active** binary sensor, an
 **Effective alarm** and **Routine starts** timestamp sensor, and **Snooze /
-Dismiss / Stop** buttons. See [`examples/dashboard-card.yaml`](examples/dashboard-card.yaml).
+Dismiss / Stop / Stop today** buttons. See [`examples/dashboard-card.yaml`](examples/dashboard-card.yaml).
+
+## Phone notifications
+
+Android shows three buttons per notification, so the controls are two levels
+deep, which also keeps the destructive option away from a half-asleep thumb:
+
+```
+Good morning, Chris — Sunrise wake starting.
+[Snooze 10]  [Snooze 20]  [More…]
+
+Wake options
+[Snooze 30]  [Dismiss, I'm up]  [Stop for today…]
+
+Stop today's wake?  (clears itself after 60 s and does nothing)
+[Keep going]  [Yes, stop today]
+```
+
+Snooze stops the music at once and fades the lamp down over `snooze_fade_sec`
+(default 45 s); choosing another snooze while snoozing just replaces the timer.
+*Stop for today* turns the lamp and speaker off, restores the phone, stands the
+phone-side layer down (no pre-mute, no escalate) and blocks any further start
+that day. Your phone alarm still rings as the backstop.
 
 ## Services
 
@@ -65,6 +87,7 @@ Dismiss / Stop** buttons. See [`examples/dashboard-card.yaml`](examples/dashboar
 | `sunrise_alarm.snooze` | Snooze; re-runs a short sunrise, auto-dismisses at the cap. |
 | `sunrise_alarm.dismiss` | Stop the routine, leave the lamp on, stop audio. |
 | `sunrise_alarm.stop` | Hard stop; lamp off, audio off. |
+| `sunrise_alarm.stop_today` | Stop and do not run again today; phone layer stood down. |
 
 Each takes `entry_id` (the profile's config-entry id). Point a voice-assistant
 routine or automation at these to snooze/dismiss by voice or speaker.

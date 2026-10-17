@@ -39,6 +39,8 @@ DEFAULT_AUDIO_DELAY_MIN: Final = 10
 DEFAULT_VOLUME_MAX: Final = 0.5
 DEFAULT_SNOOZE_MIN: Final = 9
 DEFAULT_SNOOZE_MAX: Final = 3
+CONF_SNOOZE_FADE_SEC: Final = "snooze_fade_sec"
+DEFAULT_SNOOZE_FADE_SEC: Final = 45
 DEFAULT_WINDOW_START: Final = "03:00"
 DEFAULT_WINDOW_END: Final = "11:00"
 
@@ -63,6 +65,7 @@ SERVICE_START: Final = "start"
 SERVICE_SNOOZE: Final = "snooze"
 SERVICE_DISMISS: Final = "dismiss"
 SERVICE_STOP: Final = "stop"
+SERVICE_STOP_TODAY: Final = "stop_today"
 
 # ----- Phase 2: notifications -----------------------------------------------
 CONF_PREALARM_LEAD_SEC: Final = "prealarm_lead_sec"
@@ -76,6 +79,15 @@ EVENT_NOTIFICATION_ACTION: Final = "mobile_app_notification_action"
 ACTION_SNOOZE: Final = "SUNRISE_SNOOZE"
 ACTION_DISMISS: Final = "SUNRISE_DISMISS"
 ACTION_CANCEL: Final = "SUNRISE_CANCEL"
+# Two-level notification menu (Android allows three buttons per notification).
+ACTION_MORE: Final = "SUNRISE_MORE"
+ACTION_STOP_ASK: Final = "SUNRISE_STOP_ASK"
+ACTION_STOP_CONFIRM: Final = "SUNRISE_STOP_CONFIRM"
+ACTION_KEEP: Final = "SUNRISE_KEEP"
+ACTION_SNOOZE_FOR: Final = "SUNRISE_SNOOZE_FOR"  # + _<minutes>_<entry_id>
+SNOOZE_CHOICES: Final = (10, 20, 30)
+# The stop confirmation clears itself after this long and does nothing.
+STOP_CONFIRM_TIMEOUT_SEC: Final = 60
 NOTIFY_TAG: Final = "sunrise_alarm_{entry_id}"
 
 # ----- Phase 3: phone-side integration --------------------------------------
