@@ -44,6 +44,7 @@
           "volume_max": "Max volume (0-1)",
           "snooze_min": "Snooze duration (minutes)",
           "snooze_max": "Max snooze attempts",
+          "snooze_fade_sec": "Snooze: lamp fade-down time (seconds)",
           "prealarm_lead_sec": "Pre-alarm heads-up (seconds before start)",
           "dashboard_path": "Notification tap opens (dashboard path, e.g. /lovelace/0)",
           "premute_sec": "Pre-mute the phone this many seconds before the alarm",
@@ -68,7 +69,8 @@
     "button": {
       "snooze": {"name": "Snooze"},
       "dismiss": {"name": "Dismiss"},
-      "stop": {"name": "Stop"}
+      "stop": {"name": "Stop"},
+      "stop_today": {"name": "Stop today"}
     }
   }
 }

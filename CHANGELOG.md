@@ -4,6 +4,31 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] - 2026-10-17
+
+### Added (notification controls, [#9](https://github.com/rationalRobots/haos-sunrise-alarm/issues/9))
+- **Snooze 10 / Snooze 20 on the notification**, with **Snooze 30** under
+  *More…*. A snooze chosen while already snoozing replaces the timer and does
+  not count against `snooze_max`.
+- **Stop for today**, three taps deep: *More…* → *Stop for today…* → a
+  confirmation that clears itself after 60 s and does nothing if ignored.
+  *Keep going* sits in the first slot so a reflex tap is safe. Stop turns the
+  lamp and speaker off, restores the phone, stands the phone-side layer down
+  (no pre-mute, no escalate, no failsafe; the phone alarm rings as the normal
+  backstop) and blocks any further start that day. Also exposed as the
+  `sunrise_alarm.stop_today` service and a *Stop today* button.
+- The pre-alarm notification now carries the same menu, so its old one-tap
+  *Cancel* is gone; a stale *Cancel* from an older notification routes to the
+  confirmation. *Dismiss* before the start also cancels the pending start.
+- `stop for today` is persisted, so an HA restart later that morning keeps
+  the phone layer stood down.
+- New option `snooze_fade_sec` (default 45): on snooze and stop the lamp fades
+  down over this long instead of cutting out (lamps without transition
+  support still cut out). Music still stops at once.
+- Snooze timers are tracked and cancelled by dismiss/stop/unload, so a stop
+  during a snooze can no longer be undone by the pending restart.
+- `stopped_today` attribute on the *Routine starts* sensor.
+
 ## [0.5.1] - 2026-10-05
 
 ### Fixed

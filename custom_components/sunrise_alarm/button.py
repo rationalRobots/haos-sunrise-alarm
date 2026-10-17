@@ -1,4 +1,4 @@
-"""Buttons: snooze, dismiss, stop."""
+"""Buttons: snooze, dismiss, stop, stop today."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ async def async_setup_entry(
             SunriseButton(controller, entry, "snooze", "mdi:alarm-snooze"),
             SunriseButton(controller, entry, "dismiss", "mdi:alarm-off"),
             SunriseButton(controller, entry, "stop", "mdi:stop-circle"),
+            SunriseButton(controller, entry, "stop_today", "mdi:cancel"),
         ]
     )
 
