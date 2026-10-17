@@ -137,6 +137,11 @@ class SunriseAlarmController:
         self.late_start: bool = False
         self._run_task: asyncio.Task | None = None
         self._snooze_task: asyncio.Task | None = None
+        # Serialises snooze/dismiss/stop so two fast taps cannot interleave
+        # around their awaits and leave an untracked timer behind.
+        self._op_lock = asyncio.Lock()
+        # Phone-side workers (pre-mute, firing) so a stop can cancel them.
+        self._phone_tasks: set[asyncio.Task] = set()
         # Date (YYYY-MM-DD) on which the person chose 'stop for today'.
         self._stopped_date: str | None = None
         # Last main notification, re-sent when a menu is backed out of.
@@ -244,6 +249,7 @@ class SunriseAlarmController:
                 self._unsubs[key] = None
         self._cancel_snooze()
         await self._cancel_run()
+        await self._cancel_phone_tasks()
         await self._cancel_hold()
 
     # -- alarm resolution (the source gate) ----------------------------------
@@ -527,27 +533,32 @@ class SunriseAlarmController:
             _LOGGER.info("%s: snooze ignored, wake stopped for today", self.name)
             return
         snooze_min = minutes or int(self.opt(CONF_SNOOZE_MIN, DEFAULT_SNOOZE_MIN))
-        if not self.active:
-            await self._prealarm_snooze(snooze_min)
-            return
-        replacing = self._snooze_task is not None and not self._snooze_task.done()
-        self._cancel_snooze()
-        await self._cancel_run()
-        snooze_max = int(self.opt(CONF_SNOOZE_MAX, DEFAULT_SNOOZE_MAX))
-        if not replacing:
-            self.snooze_count += 1
-        if self.snooze_count > snooze_max:
-            await self.async_dismiss()
-            return
-        await self._quiet(fade=True)
-        self._signal()
-        await self._notify_main(
-            title=None,
-            message=f"Snoozing {snooze_min} min ({self.snooze_count}/{snooze_max}).",
-        )
-        self._snooze_task = self.hass.async_create_task(
-            self._snooze_wait(snooze_min)
-        )
+        async with self._op_lock:
+            if self.stopped_today:
+                return
+            if not self.active:
+                await self._prealarm_snooze(snooze_min)
+                return
+            replacing = (
+                self._snooze_task is not None and not self._snooze_task.done()
+            )
+            self._cancel_snooze()
+            await self._cancel_run()
+            snooze_max = int(self.opt(CONF_SNOOZE_MAX, DEFAULT_SNOOZE_MAX))
+            if not replacing:
+                self.snooze_count += 1
+            if self.snooze_count > snooze_max:
+                await self._dismiss_locked()
+                return
+            await self._quiet(fade=True)
+            self._signal()
+            await self._notify_main(
+                title=None,
+                message=f"Snoozing {snooze_min} min ({self.snooze_count}/{snooze_max}).",
+            )
+            self._snooze_task = self.hass.async_create_task(
+                self._snooze_wait(snooze_min)
+            )
 
     async def _snooze_wait(self, minutes: int) -> None:
         await asyncio.sleep(minutes * 60)
@@ -597,6 +608,10 @@ class SunriseAlarmController:
         Also stands the phone-side layer down (no pre-mute, no escalate, no
         failsafe), so the phone alarm rings as the normal backstop.
         """
+        async with self._op_lock:
+            await self._stop_today_locked()
+
+    async def _stop_today_locked(self) -> None:
         today = dt_util.now().strftime("%Y-%m-%d")
         self._stopped_date = today
         self._pstate["stopped_date"] = today
@@ -606,6 +621,9 @@ class SunriseAlarmController:
             self._cancel_timer(key)
         self._cancel_snooze()
         await self._cancel_run()
+        # Pre-mute / firing workers already dispatched must not mute the
+        # phone again (or escalate) after we restore it.
+        await self._cancel_phone_tasks()
         await self._cancel_hold()
         self.active = False
         self.snooze_count = 0
@@ -624,6 +642,10 @@ class SunriseAlarmController:
         self._signal()
 
     async def async_dismiss(self) -> None:
+        async with self._op_lock:
+            await self._dismiss_locked()
+
+    async def _dismiss_locked(self) -> None:
         if not self.active:
             # "I'm up" before the routine started: the pending start must not
             # pull the lamp back down to 1% a minute later.
@@ -647,9 +669,11 @@ class SunriseAlarmController:
         self._signal()
 
     async def async_stop(self) -> None:
-        self._cancel_snooze()
-        await self._cancel_run()
-        await self._cancel_hold()
+        async with self._op_lock:
+            self._cancel_snooze()
+            await self._cancel_run()
+            await self._cancel_phone_tasks()
+            await self._cancel_hold()
         self.active = False
         self.snooze_count = 0
         light = self.opt(CONF_LIGHT)
@@ -660,6 +684,23 @@ class SunriseAlarmController:
             await self._call("light", "turn_off", light)
         await self.async_restore_phone()
         self._signal()
+
+    def _phone_task(self, coro) -> None:
+        """Run a phone-side worker and keep a handle so stop can cancel it."""
+        task = self.hass.async_create_task(coro)
+        self._phone_tasks.add(task)
+        task.add_done_callback(self._phone_tasks.discard)
+
+    async def _cancel_phone_tasks(self) -> None:
+        tasks = [t for t in self._phone_tasks if not t.done()]
+        self._phone_tasks.clear()
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     async def _cancel_run(self) -> None:
         task = self._run_task
@@ -789,10 +830,15 @@ class SunriseAlarmController:
         self._unsubs["premute"] = None
         if not self.enabled or self._suppress_next or not self._session_live():
             return
-        self.hass.async_create_task(self._premute())
+        self._phone_task(self._premute())
 
     async def _premute(self) -> None:
+        if self.stopped_today:
+            return
         await self.async_mute_phone()
+        if self.stopped_today:
+            await self.async_restore_phone()
+            return
         await self._start_hold()
 
     @callback
@@ -800,10 +846,15 @@ class SunriseAlarmController:
         self._unsubs["firing"] = None
         if not self.enabled or not self._session_live():
             return
-        self.hass.async_create_task(self._on_firing())
+        self._phone_task(self._on_firing())
 
     async def _on_firing(self) -> None:
+        if self.stopped_today:
+            return
         await self.async_mute_phone()
+        if self.stopped_today:
+            await self.async_restore_phone()
+            return
         await self._start_hold()
         self.active = True
         if self.opt(CONF_ESCALATE, DEFAULT_ESCALATE):
@@ -824,7 +875,7 @@ class SunriseAlarmController:
         firing_pkg = self.opt(CONF_FIRING_PACKAGE, DEFAULT_FIRING_PACKAGE)
         snoozed_ch = self.opt(CONF_SNOOZED_CHANNEL, DEFAULT_SNOOZED_CHANNEL)
         if channel == firing_ch and package == firing_pkg:
-            self.hass.async_create_task(self._on_firing())
+            self._phone_task(self._on_firing())
         elif channel == snoozed_ch:
             self.hass.async_create_task(self._on_phone_snooze())
 

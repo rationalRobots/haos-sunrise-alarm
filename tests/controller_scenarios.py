@@ -192,6 +192,38 @@ async def notifications():
         c3.async_start_run = AsyncMock()
         await gate.release()
         assert c3.async_start_run.await_count == 0, "snooze restarted after dismiss"
+        # Two fast snooze taps: serialised, one timer, count 1
+        c5 = make({}, (now + timedelta(minutes=40)).isoformat())
+        await c5.async_start_run()
+        real_cancel = c5._cancel_run
+        async def slow_cancel():
+            await gate.real(0); await gate.real(0); await real_cancel()
+        c5._cancel_run = slow_cancel
+        await asyncio.gather(action(c5, f"{co.ACTION_SNOOZE_FOR}_10_e1"),
+                             action(c5, f"{co.ACTION_SNOOZE_FOR}_20_e1"))
+        live = [t for t in asyncio.all_tasks() if t.get_coro().__qualname__.endswith("_snooze_wait") and not t.done()]
+        assert c5.snooze_count == 1 and len(live) == 1, (c5.snooze_count, len(live))
+        # Pre-mute worker in flight when stop arrives must not leave the phone muted
+        c6 = make({}, (now + timedelta(minutes=40)).isoformat())
+        c6._pstate["overridden"] = False
+        muted = {"n": 0}
+        async def mute():
+            await gate.real(0); await gate.real(0)
+            muted["n"] += 1; c6._pstate["overridden"] = True
+        async def restore():
+            c6._pstate["overridden"] = False
+        c6.async_mute_phone = mute
+        c6.async_restore_phone = restore
+        c6._start_hold = AsyncMock()
+        c6._last_run_date = now.strftime("%Y-%m-%d")
+        c6._handle_premute(now)
+        assert len(c6._phone_tasks) == 1
+        await c6.async_stop_today()
+        for _ in range(5):
+            await gate.real(0)
+        assert not c6._pstate["overridden"], "phone left muted after stop"
+        assert not c6._start_hold.await_count, "hold started after stop"
+        assert not c6._phone_tasks
         # Dismiss on the pre-alarm notification cancels the pending start
         c4 = make({}, (now + timedelta(minutes=40)).isoformat())
         c4._reschedule()
