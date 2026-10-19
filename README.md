@@ -48,6 +48,11 @@ Adding the integration creates one **profile**. Pick the lamp, and optionally th
 speaker, notify service and the phone's Next-alarm sensor. Add the integration
 again for each additional person.
 
+The wake only runs when the profile's person is **home** (option
+`require_home`, on by default; an unknown tracker never blocks it). Away, the
+scheduled wake does nothing and the phone alarm simply rings as normal, with
+no pre-mute. A manual start from the button or service ignores the option.
+
 Per-profile timings live under the profile's **Configure** (options): lead time,
 sunrise duration, max brightness, start/end colour temperature, audio media id
 and type, audio delay, max volume, snooze duration and cap, and the morning

@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.1] - 2026-10-19
+
+### Added
+- **Only run when home** ([#5](https://github.com/rationalRobots/haos-sunrise-alarm/issues/5)).
+  New option `require_home` (default on). When the profile's person is not
+  `home` at start time, the pre-alarm, the scheduled start and the late start
+  are all skipped with reason "person is not home", and because no run
+  begins the phone-side layer (pre-mute, escalate, failsafe) never arms, so
+  the phone alarm rings normally wherever you are. An unknown or unavailable
+  tracker never blocks the wake. Manual start (button/service) ignores it.
+  `person_home` attribute on the *Routine starts* sensor.
+
 ## [0.6.0] - 2026-10-17
 
 ### Added (notification controls, [#9](https://github.com/rationalRobots/haos-sunrise-alarm/issues/9))

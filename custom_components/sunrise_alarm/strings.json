@@ -49,6 +49,7 @@
           "dashboard_path": "Notification tap opens (dashboard path, e.g. /lovelace/0)",
           "premute_sec": "Pre-mute the phone this many seconds before the alarm",
           "escalate": "Escalate (lamp 100% + audio max) if the phone fires",
+          "require_home": "Only run when the person is home",
           "failsafe_extra_min": "Failsafe un-mute this many minutes after snooze",
           "window_start": "Morning window start",
           "window_end": "Morning window end"
