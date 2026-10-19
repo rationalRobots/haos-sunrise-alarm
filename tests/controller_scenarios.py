@@ -236,9 +236,47 @@ async def notifications():
     print("notifications: ok")
 
 
+async def presence():
+    now = dt_util.now().replace(microsecond=0)
+    alarm = (now + timedelta(minutes=40)).isoformat()
+
+    def mk(person_state, opts=None):
+        c = make(opts or {}, alarm)
+        c.entry.data = {"alarm_sensor": "sensor.x", "person": "person.chris"}
+        alarm_st = c.hass.states.get.return_value
+        person_st = MagicMock(); person_st.state = person_state; person_st.attributes = {}
+        c.hass.states.get.side_effect = lambda eid: {"sensor.x": alarm_st, "person.chris": person_st}.get(eid)
+        c.async_start_run = AsyncMock()
+        return c
+
+    with patch.object(co, "async_track_point_in_time", return_value=lambda: None):
+        # Away: scheduled start skipped, no pre-alarm, phone layer never live
+        c = mk("not_home"); c._reschedule()
+        c._handle_prealarm(now); await asyncio.sleep(0)
+        assert not calls(c, "notify"), "pre-alarm sent while away"
+        c._handle_start(now); await asyncio.sleep(0)
+        assert c.async_start_run.await_count == 0 and c.last_skip_reason == "person is not home"
+        assert not c._session_live() and c.person_home() is False
+        # Away: late start skipped too
+        c = mk("not_home"); c.hass.states.get("sensor.x").state = (now + timedelta(minutes=20)).isoformat()
+        c._reschedule(); await asyncio.sleep(0)
+        assert c.async_start_run.await_count == 0 and c.last_skip_reason == "person is not home"
+        # Home: runs
+        c = mk("home"); c._reschedule(); c._handle_start(now); await asyncio.sleep(0)
+        assert c.async_start_run.await_count == 1 and c.person_home() is True
+        # Unknown tracker: fails open
+        c = mk("unavailable"); c._reschedule(); c._handle_start(now); await asyncio.sleep(0)
+        assert c.async_start_run.await_count == 1 and c.person_home() is None
+        # Option off: away still runs
+        c = mk("not_home", {"require_home": False}); c._reschedule(); c._handle_start(now); await asyncio.sleep(0)
+        assert c.async_start_run.await_count == 1
+    print("presence: ok")
+
+
 async def main():
     await scheduling()
     await notifications()
+    await presence()
     print("ALL SCENARIOS PASSED")
 
 

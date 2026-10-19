@@ -59,7 +59,9 @@ from .const import (
     CONF_NOTIFY,
     CONF_PHONE_STATE_SENSOR,
     CONF_PREALARM_LEAD_SEC,
+    CONF_PERSON,
     CONF_PREMUTE_SEC,
+    CONF_REQUIRE_HOME,
     CONF_RAMP_MIN,
     CONF_SNOOZED_CHANNEL,
     CONF_SNOOZE_FADE_SEC,
@@ -86,6 +88,7 @@ from .const import (
     DEFAULT_PREALARM_LEAD_SEC,
     DEFAULT_PREMUTE_SEC,
     DEFAULT_RAMP_MIN,
+    DEFAULT_REQUIRE_HOME,
     DEFAULT_SNOOZED_CHANNEL,
     DEFAULT_SNOOZE_FADE_SEC,
     DEFAULT_SNOOZE_MAX,
@@ -378,6 +381,9 @@ class SunriseAlarmController:
         if self.stopped_today:
             self._skip("stopped for today", logging.INFO)
             return
+        if self._away():
+            self._skip("person is not home", logging.INFO)
+            return
         if self._session_live():
             # Already running or ran today: a normal reschedule mid-run
             # (e.g. the sensor re-publishing). Not a skip.
@@ -405,6 +411,27 @@ class SunriseAlarmController:
         """True once the person has chosen 'stop for today'."""
         return self._stopped_date == dt_util.now().strftime("%Y-%m-%d")
 
+    def person_home(self) -> bool | None:
+        """True/False from the profile's person entity; None if not known."""
+        person = self.opt(CONF_PERSON)
+        if not person:
+            return None
+        st = self.hass.states.get(person)
+        if st is None or st.state.lower() in _UNAVAILABLE:
+            return None
+        return st.state == "home"
+
+    def _away(self) -> bool:
+        """True when the wake must not run because the person is away.
+
+        Fails open: an unknown or unavailable tracker never blocks the wake.
+        Without a run the phone layer never arms either, so the phone alarm
+        rings normally wherever the person is.
+        """
+        if not self.opt(CONF_REQUIRE_HOME, DEFAULT_REQUIRE_HOME):
+            return False
+        return self.person_home() is False
+
     def _session_live(self) -> bool:
         """True if a run is active or already ran today, and was not stopped.
 
@@ -424,6 +451,7 @@ class SunriseAlarmController:
             or self.active
             or self._suppress_next
             or self.stopped_today
+            or self._away()
         ):
             return
         self.hass.async_create_task(
@@ -449,6 +477,9 @@ class SunriseAlarmController:
             return
         if self.stopped_today:
             self._skip("stopped for today")
+            return
+        if self._away():
+            self._skip("person is not home")
             return
         if self._last_run_date == today:
             self._skip("already ran today")
