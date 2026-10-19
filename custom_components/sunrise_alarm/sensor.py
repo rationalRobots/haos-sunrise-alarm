@@ -64,4 +64,5 @@ class SunriseStartTimeSensor(SunriseAlarmEntity, SensorEntity):
             "late_start": self._controller.late_start,
             "last_skip_reason": self._controller.last_skip_reason,
             "stopped_today": self._controller.stopped_today,
+            "person_home": self._controller.person_home(),
         }
