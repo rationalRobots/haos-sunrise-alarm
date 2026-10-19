@@ -50,7 +50,8 @@ again for each additional person.
 
 The wake only runs when the profile's person is **home** (option
 `require_home`, on by default; an unknown tracker never blocks it). Away, the
-phone alarm simply rings as normal and the phone is never muted.
+scheduled wake does nothing and the phone alarm simply rings as normal, with
+no pre-mute. A manual start from the button or service ignores the option.
 
 Per-profile timings live under the profile's **Configure** (options): lead time,
 sunrise duration, max brightness, start/end colour temperature, audio media id

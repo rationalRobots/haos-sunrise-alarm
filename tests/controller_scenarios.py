@@ -257,6 +257,29 @@ async def presence():
         c._handle_start(now); await asyncio.sleep(0)
         assert c.async_start_run.await_count == 0 and c.last_skip_reason == "person is not home"
         assert not c._session_live() and c.person_home() is False
+        # ...and the phone-layer handlers stay inert even with yesterday's run date
+        c._last_run_date = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+        c.async_mute_phone = AsyncMock(); c.async_escalate = AsyncMock()
+        c._handle_premute(now); c._handle_firing_time(now)
+        for _ in range(3):
+            await asyncio.sleep(0)
+        assert c.async_mute_phone.await_count == 0 and c.async_escalate.await_count == 0
+        assert not c._phone_tasks
+        # Coming home inside the lead window -> person listener triggers a late start
+        c = mk("not_home"); c.hass.states.get("sensor.x").state = (now + timedelta(minutes=20)).isoformat()
+        c._reschedule(); await asyncio.sleep(0)
+        assert c.async_start_run.await_count == 0
+        c.hass.states.get("person.chris").state = "home"
+        ev = MagicMock(); old = MagicMock(); old.state = "not_home"; new = MagicMock(); new.state = "home"
+        ev.data = {"old_state": old, "new_state": new}
+        c._handle_person_change(ev); await asyncio.sleep(0)
+        assert c.async_start_run.await_count == 1, "no late start on arriving home"
+        # Attribute-only churn (same state) does not reschedule
+        c._reschedule = MagicMock()
+        same = MagicMock(); same.state = "home"
+        ev.data = {"old_state": same, "new_state": new}
+        c._handle_person_change(ev)
+        assert c._reschedule.call_count == 0
         # Away: late start skipped too
         c = mk("not_home"); c.hass.states.get("sensor.x").state = (now + timedelta(minutes=20)).isoformat()
         c._reschedule(); await asyncio.sleep(0)

@@ -161,6 +161,7 @@ class SunriseAlarmController:
             "notif": None,
             "removed": None,
             "phone": None,
+            "person": None,
         }
         self._last_run_date: str | None = None
         self._suppress_next: bool = False
@@ -232,6 +233,13 @@ class SunriseAlarmController:
             self._unsubs["removed"] = async_track_state_change_event(
                 self.hass, [removed], self._handle_removed
             )
+        person = self.opt(CONF_PERSON)
+        if person:
+            # Arriving home inside the lead window should still get a (late)
+            # sunrise, and the person_home attribute should not go stale.
+            self._unsubs["person"] = async_track_state_change_event(
+                self.hass, [person], self._handle_person_change
+            )
         phone = self.opt(CONF_PHONE_STATE_SENSOR)
         if phone:
             self._unsubs["phone"] = async_track_state_change_event(
@@ -293,6 +301,15 @@ class SunriseAlarmController:
     # -- scheduling ----------------------------------------------------------
     @callback
     def _handle_alarm_change(self, event) -> None:
+        self._reschedule()
+
+    @callback
+    def _handle_person_change(self, event) -> None:
+        old = event.data.get("old_state")
+        new = event.data.get("new_state")
+        # GPS attribute churn fires this often; only a real state change matters.
+        if new is None or (old is not None and old.state == new.state):
+            return
         self._reschedule()
 
     @callback
@@ -381,12 +398,12 @@ class SunriseAlarmController:
         if self.stopped_today:
             self._skip("stopped for today", logging.INFO)
             return
-        if self._away():
-            self._skip("person is not home", logging.INFO)
-            return
         if self._session_live():
             # Already running or ran today: a normal reschedule mid-run
             # (e.g. the sensor re-publishing). Not a skip.
+            return
+        if self._away():
+            self._skip("person is not home", logging.INFO)
             return
         configured = int(self.opt(CONF_RAMP_MIN, DEFAULT_RAMP_MIN))
         ramp_min = max(
@@ -478,11 +495,11 @@ class SunriseAlarmController:
         if self.stopped_today:
             self._skip("stopped for today")
             return
-        if self._away():
-            self._skip("person is not home")
-            return
         if self._last_run_date == today:
             self._skip("already ran today")
+            return
+        if self._away():
+            self._skip("person is not home")
             return
         self.last_skip_reason = None
         self.late_start = False
