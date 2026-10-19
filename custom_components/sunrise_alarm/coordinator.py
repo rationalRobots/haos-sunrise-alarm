@@ -628,8 +628,13 @@ class SunriseAlarmController:
     async def _prealarm_snooze_wait(self, minutes: int) -> None:
         await asyncio.sleep(minutes * 60)
         self._snooze_task = None
-        if not self.stopped_today and not self.active:
-            await self.async_start_run(ramp_min=2)
+        if self.stopped_today or self.active:
+            return
+        if self._away():
+            # Left home while the pre-alarm snooze was running.
+            self._skip("person is not home", logging.INFO)
+            return
+        await self.async_start_run(ramp_min=2)
 
     def _cancel_snooze(self) -> None:
         task = self._snooze_task

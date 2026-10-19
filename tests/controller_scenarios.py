@@ -274,6 +274,15 @@ async def presence():
         ev.data = {"old_state": old, "new_state": new}
         c._handle_person_change(ev); await asyncio.sleep(0)
         assert c.async_start_run.await_count == 1, "no late start on arriving home"
+        # Pre-alarm snooze, then leaving home before it expires -> no start
+        gate = Gate()
+        with patch.object(co.asyncio, "sleep", gate):
+            c = mk("home")
+            await c.async_snooze(10)
+            assert c._snooze_task is not None and c._suppress_next
+            c.hass.states.get("person.chris").state = "not_home"
+            await gate.release()
+            assert c.async_start_run.await_count == 0 and c.last_skip_reason == "person is not home"
         # Attribute-only churn (same state) does not reschedule
         c._reschedule = MagicMock()
         same = MagicMock(); same.state = "home"
