@@ -42,6 +42,19 @@ DEFAULT_SNOOZE_MAX: Final = 3
 CONF_SNOOZE_FADE_SEC: Final = "snooze_fade_sec"
 CONF_REQUIRE_HOME: Final = "require_home"
 DEFAULT_REQUIRE_HOME: Final = True
+# Auto-dismiss when the person is clearly up and about (Companion sensors).
+CONF_AWAKE_STOP: Final = "awake_stop"
+DEFAULT_AWAKE_STOP: Final = False
+CONF_AWAKE_LOCKED: Final = "awake_locked_sensor"
+CONF_AWAKE_INTERACTIVE: Final = "awake_interactive_sensor"
+CONF_AWAKE_CHARGING: Final = "awake_charging_sensor"
+CONF_AWAKE_STEPS: Final = "awake_steps_sensor"
+CONF_AWAKE_ACTIVITY: Final = "awake_activity_sensor"
+CONF_AWAKE_DEBOUNCE_SEC: Final = "awake_debounce_sec"
+DEFAULT_AWAKE_DEBOUNCE_SEC: Final = 30
+# Steps must climb by at least this much since the run started to count as moving.
+AWAKE_STEP_DELTA: Final = 5
+AWAKE_MOVING: Final = ("walking", "running", "on_foot")
 DEFAULT_SNOOZE_FADE_SEC: Final = 45
 DEFAULT_WINDOW_START: Final = "03:00"
 DEFAULT_WINDOW_END: Final = "11:00"

@@ -53,6 +53,14 @@ The wake only runs when the profile's person is **home** (option
 scheduled wake does nothing and the phone alarm simply rings as normal, with
 no pre-mute. A manual start from the button or service ignores the option.
 
+With **`awake_stop`** (default off) the running wake dismisses itself once you
+are clearly up: phone **unlocked and interactive and off the charger**, and
+**either your step count is climbing or detected activity is walking/running**,
+held for `awake_debounce_sec`. Music stops, the lamp stays on. Every sensor must
+report, so a half-configured profile never auto-stops. This also means you never
+have to tap *Dismiss* — which is what previously left the wake "active" and
+blocked the next morning.
+
 Per-profile timings live under the profile's **Configure** (options): lead time,
 sunrise duration, max brightness, start/end colour temperature, audio media id
 and type, audio delay, max volume, snooze duration and cap, and the morning
