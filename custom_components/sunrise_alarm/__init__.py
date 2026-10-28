@@ -33,9 +33,7 @@ from .coordinator import SunriseAlarmController
 _SERVICE_SCHEMA = vol.Schema({vol.Required("entry_id"): cv.string})
 
 
-# Companion suffix per awake config key; the phone's entity slug is shared
-# across all its sensors, so we can derive these from any wired companion
-# sensor without touching the registry's device graph.
+# Awake config key -> (domain, Companion entity suffix) on the phone's device.
 _AWAKE_DERIVE: dict[str, tuple[str, str]] = {
     CONF_AWAKE_LOCKED: ("binary_sensor", "device_locked"),
     CONF_AWAKE_INTERACTIVE: ("binary_sensor", "interactive"),
@@ -43,33 +41,31 @@ _AWAKE_DERIVE: dict[str, tuple[str, str]] = {
     CONF_AWAKE_STEPS: ("sensor", "daily_steps"),
     CONF_AWAKE_ACTIVITY: ("sensor", "detected_activity"),
 }
-# Known companion sensors we can read the phone's entity slug from.
-_SLUG_FROM = {
-    CONF_ALARM_SENSOR: "_next_alarm",
-    CONF_PHONE_STATE_SENSOR: "_phone_state",
-    CONF_DND_SENSOR: "_do_not_disturb_sensor",
-}
+# Already-wired companion sensors whose registry entry names the phone device.
+_DEVICE_SOURCE_KEYS = (CONF_ALARM_SENSOR, CONF_PHONE_STATE_SENSOR, CONF_DND_SENSOR)
 
 
-def _phone_slug(data: dict) -> str | None:
-    """Recover the phone's entity slug (e.g. 's24u') from a wired sensor."""
-    for key, suffix in _SLUG_FROM.items():
+def _phone_device_id(reg, data: dict) -> str | None:
+    """The device_id of the phone, via a companion sensor already on the profile."""
+    for key in _DEVICE_SOURCE_KEYS:
         eid = data.get(key)
-        if eid and "." in eid:
-            obj = eid.split(".", 1)[1]
-            if obj.endswith(suffix):
-                return obj[: -len(suffix)]
+        if not eid:
+            continue
+        ent = reg.async_get(eid)
+        if ent and ent.device_id:
+            return ent.device_id
     return None
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """v1 -> v2: wire the awake-detection sensors and turn the feature on.
 
-    0.7.0 added "stop when I'm up". Existing profiles have none of the awake
-    sensors in their config, so this derives them from the phone slug already
-    present, verifies each exists, and enables awake_stop. The feature fails
-    closed, so any sensor it can't resolve simply leaves that profile's
-    detection partial rather than misfiring.
+    0.7.0 added "stop when I'm up"; profiles created earlier have none of the
+    awake sensors configured. This finds the phone's device from a companion
+    sensor already on the profile and discovers the awake sensors *on that
+    device* (not by name-guessing, which renames would break), then enables
+    awake_stop. The feature fails closed, so any sensor it can't resolve just
+    leaves detection partial rather than misfiring on another device.
     """
     if entry.version > 2:
         # Written by a newer version; this code can't safely downgrade it.
@@ -77,15 +73,26 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if entry.version == 2:
         return True
     options = dict(entry.options)
-    slug = _phone_slug({**entry.data, **options})
-    if slug:
-        reg = er.async_get(hass)
+    reg = er.async_get(hass)
+    device_id = _phone_device_id(reg, {**entry.data, **options})
+    if device_id:
+        on_device = er.async_entries_for_device(
+            reg, device_id, include_disabled_entities=True
+        )
         for key, (domain, suffix) in _AWAKE_DERIVE.items():
             if key in options or key in entry.data:
                 continue
-            candidate = f"{domain}.{slug}_{suffix}"
-            if reg.async_get(candidate):
-                options[key] = candidate
+            match = next(
+                (
+                    e.entity_id
+                    for e in on_device
+                    if e.entity_id.startswith(f"{domain}.")
+                    and e.entity_id.endswith(f"_{suffix}")
+                ),
+                None,
+            )
+            if match:
+                options[key] = match
     options.setdefault(CONF_AWAKE_STOP, True)
     hass.config_entries.async_update_entry(entry, options=options, version=2)
     return True
