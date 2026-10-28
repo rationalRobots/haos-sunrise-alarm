@@ -305,10 +305,155 @@ async def presence():
     print("presence: ok")
 
 
+AWAKE_OPTS = {
+    "awake_stop": True, "awake_debounce_sec": 30,
+    "awake_locked_sensor": "binary_sensor.lock",
+    "awake_interactive_sensor": "binary_sensor.inter",
+    "awake_charging_sensor": "binary_sensor.charge",
+    "awake_steps_sensor": "sensor.steps",
+    "awake_activity_sensor": "sensor.activity",
+}
+
+
+def _st(val):
+    m = MagicMock(); m.state = val; m.attributes = {}
+    return m
+
+
+def mk_awake(states, opts=None):
+    c = make({**AWAKE_OPTS, **(opts or {})}, "2026-10-28T09:00:00+00:00")
+    c.hass.states.get.side_effect = lambda eid: (
+        _st(states[eid]) if eid in states else None
+    )
+    return c
+
+
+AWAKE_UP = {
+    "binary_sensor.lock": "off", "binary_sensor.inter": "on",
+    "binary_sensor.charge": "off", "sensor.steps": "1200", "sensor.activity": "walking",
+}
+
+
+async def issue2():
+    now = dt_util.now().replace(microsecond=0)
+    today = now.strftime("%Y-%m-%d")
+    yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    # Ramp finishes on its own -> active STAYS set (wake session still on),
+    # _run_task cleared. Start-blocking no longer depends on this flag.
+    with patch.object(co.asyncio, "sleep", AsyncMock()):
+        c = make({"ramp_min": 1}, (now + timedelta(minutes=40)).isoformat())
+        await c.async_start_run()
+        assert c.active
+        t = c._run_task
+        await t
+        assert c.active and c._run_task is None
+    # A flag left from a PRIOR day is cleared; a flag from today is kept.
+    c = make({}, (now + timedelta(minutes=40)).isoformat())
+    c.active = True; c._run_task = None; c._snooze_task = None
+    c._last_run_date = yesterday
+    c._clear_stale_active()
+    assert not c.active
+    c = make({}, (now + timedelta(minutes=40)).isoformat())
+    c.active = True; c._run_task = None; c._snooze_task = None
+    c._last_run_date = today
+    c._clear_stale_active()
+    assert c.active, "same-day flag wrongly cleared (would break awake/snooze)"
+    # _run_task is assigned before the start notification (race guard)
+    with patch.object(co.asyncio, "sleep", AsyncMock()):
+        c = make({"ramp_min": 1}, (now + timedelta(minutes=40)).isoformat())
+        seen = {}
+        orig = c._notify_main
+        async def spy(*a, **k):
+            seen["run_task_set"] = c._run_task is not None
+            return await orig(*a, **k)
+        c._notify_main = spy
+        await c.async_start_run()
+        assert seen.get("run_task_set") is True
+        if c._run_task:
+            await c._run_task
+    # A live run blocks a second start; a stale prior-day flag does not.
+    with patch.object(co, "async_track_point_in_time", return_value=lambda: None):
+        c = make({}, (now + timedelta(minutes=40)).isoformat())
+        c.async_start_run = AsyncMock()
+        c.active = True; c._last_run_date = yesterday
+        c._run_task = None; c._snooze_task = None
+        c._reschedule(); c._handle_start(now); await asyncio.sleep(0)
+        assert c.async_start_run.await_count == 1 and not c.last_skip_reason
+        # live routine -> blocked
+        c = make({}, (now + timedelta(minutes=40)).isoformat())
+        c.async_start_run = AsyncMock()
+        c._run_task = asyncio.ensure_future(asyncio.sleep(3600))
+        c._reschedule(); c._handle_start(now); await asyncio.sleep(0)
+        assert c.async_start_run.await_count == 0 and c.last_skip_reason == "a run is already active"
+        c._run_task.cancel()
+    # Dismiss stands the phone layer down for the day (#8 interaction)
+    c = make({}, (now + timedelta(minutes=40)).isoformat())
+    c.active = True; c._last_run_date = today
+    for k in ("premute", "firing", "failsafe"):
+        c._unsubs[k] = lambda: None
+    await c.async_dismiss()
+    assert c._dismissed_date == today
+    assert all(c._unsubs[k] is None for k in ("premute", "firing", "failsafe"))
+    assert not c._phone_layer_live()
+    c.async_mute_phone = AsyncMock(); c.async_escalate = AsyncMock()
+    c._handle_firing_time(now)
+    for _ in range(3):
+        await asyncio.sleep(0)
+    assert c.async_mute_phone.await_count == 0 and c.async_escalate.await_count == 0
+    print("issue2: ok")
+
+
+async def awake():
+    # Composite: unlocked + interactive + off charger + walking -> awake
+    c = mk_awake(AWAKE_UP); c._steps_baseline = 1000
+    assert c._is_awake()
+    # On the charger -> not awake
+    c = mk_awake({**AWAKE_UP, "binary_sensor.charge": "on"}); c._steps_baseline = 1000
+    assert not c._is_awake()
+    # Still, and steps not risen enough -> not awake
+    c = mk_awake({**AWAKE_UP, "sensor.activity": "still", "sensor.steps": "1002"})
+    c._steps_baseline = 1000
+    assert not c._is_awake()
+    # Steps risen >=5 (still activity) -> awake via steps
+    c = mk_awake({**AWAKE_UP, "sensor.activity": "still", "sensor.steps": "1006"})
+    c._steps_baseline = 1000
+    assert c._is_awake()
+    # Missing interactive sensor -> fails closed
+    c = mk_awake({k: v for k, v in AWAKE_UP.items() if k != "binary_sensor.inter"})
+    c._steps_baseline = 1000
+    assert not c._is_awake()
+    # Debounce + auto-dismiss while a run is active
+    gate = Gate()
+    with patch.object(co.asyncio, "sleep", gate):
+        c = mk_awake(AWAKE_UP); c._steps_baseline = 1000; c.active = True
+        c.async_dismiss = AsyncMock()
+        c._handle_awake_change(MagicMock())
+        assert c._awake_task is not None
+        await gate.release()
+        assert c.async_dismiss.await_count == 1 and c._awake_task is None
+        # Awake drops during debounce -> cancelled, no dismiss
+        c = mk_awake(AWAKE_UP); c._steps_baseline = 1000; c.active = True
+        c.async_dismiss = AsyncMock()
+        c._handle_awake_change(MagicMock())
+        c.hass.states.get.side_effect = lambda eid: (
+            _st("on") if eid == "binary_sensor.charge" else _st(AWAKE_UP.get(eid, ""))
+        )
+        c._handle_awake_change(MagicMock())
+        await gate.release()
+        assert c.async_dismiss.await_count == 0 and c._awake_task is None
+        # Not awake while inactive: no debounce starts
+        c = mk_awake(AWAKE_UP); c._steps_baseline = 1000; c.active = False
+        c._handle_awake_change(MagicMock())
+        assert c._awake_task is None
+    print("awake: ok")
+
+
 async def main():
     await scheduling()
     await notifications()
     await presence()
+    await issue2()
+    await awake()
     print("ALL SCENARIOS PASSED")
 
 

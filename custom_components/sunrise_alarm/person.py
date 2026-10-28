@@ -15,6 +15,11 @@ from homeassistant.util import slugify
 from .const import (
     CONF_ALARM_SENSOR,
     CONF_ALARM_VOL_SENSOR,
+    CONF_AWAKE_ACTIVITY,
+    CONF_AWAKE_CHARGING,
+    CONF_AWAKE_INTERACTIVE,
+    CONF_AWAKE_LOCKED,
+    CONF_AWAKE_STEPS,
     CONF_DND_SENSOR,
     CONF_LAST_NOTIF_SENSOR,
     CONF_LAST_REMOVED_SENSOR,
@@ -30,6 +35,15 @@ _SENSOR_SUFFIXES: dict[str, str] = {
     CONF_LAST_NOTIF_SENSOR: "last_notification",
     CONF_LAST_REMOVED_SENSOR: "last_removed_notification",
     CONF_PHONE_STATE_SENSOR: "phone_state",
+}
+
+# Awake-detection sensors, which span the sensor and binary_sensor domains.
+_AWAKE_SUFFIXES: dict[str, tuple[str, str]] = {
+    CONF_AWAKE_LOCKED: ("binary_sensor", "device_locked"),
+    CONF_AWAKE_INTERACTIVE: ("binary_sensor", "interactive"),
+    CONF_AWAKE_CHARGING: ("binary_sensor", "is_charging"),
+    CONF_AWAKE_STEPS: ("sensor", "daily_steps"),
+    CONF_AWAKE_ACTIVITY: ("sensor", "detected_activity"),
 }
 
 
@@ -91,6 +105,18 @@ def resolve_person(hass: HomeAssistant, person_entity: str) -> dict[str, str]:
                     e.entity_id
                     for e in entities
                     if e.entity_id.startswith("sensor.")
+                    and e.entity_id.endswith(f"_{suffix}")
+                ),
+                None,
+            )
+            if match:
+                found[conf_key] = match
+        for conf_key, (domain, suffix) in _AWAKE_SUFFIXES.items():
+            match = next(
+                (
+                    e.entity_id
+                    for e in entities
+                    if e.entity_id.startswith(f"{domain}.")
                     and e.entity_id.endswith(f"_{suffix}")
                 ),
                 None,

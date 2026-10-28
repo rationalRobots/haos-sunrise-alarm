@@ -50,6 +50,13 @@
           "premute_sec": "Pre-mute the phone this many seconds before the alarm",
           "escalate": "Escalate (lamp 100% + audio max) if the phone fires",
           "require_home": "Only run when the person is home",
+          "awake_stop": "Stop automatically when I'm up and moving",
+          "awake_debounce_sec": "Awake: confirm for this many seconds before stopping",
+          "awake_locked_sensor": "Awake: phone lock sensor (binary_sensor, on = locked)",
+          "awake_interactive_sensor": "Awake: phone interactive sensor",
+          "awake_charging_sensor": "Awake: phone charging sensor (on = charging)",
+          "awake_steps_sensor": "Awake: daily steps sensor",
+          "awake_activity_sensor": "Awake: detected-activity sensor",
           "failsafe_extra_min": "Failsafe un-mute this many minutes after snooze",
           "window_start": "Morning window start",
           "window_end": "Morning window end"

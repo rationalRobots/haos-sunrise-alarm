@@ -29,6 +29,13 @@ from .const import (
     CONF_LEAD_MIN,
     CONF_LIGHT,
     CONF_NOTIFY,
+    CONF_AWAKE_ACTIVITY,
+    CONF_AWAKE_CHARGING,
+    CONF_AWAKE_DEBOUNCE_SEC,
+    CONF_AWAKE_INTERACTIVE,
+    CONF_AWAKE_LOCKED,
+    CONF_AWAKE_STEPS,
+    CONF_AWAKE_STOP,
     CONF_PERSON,
     CONF_REQUIRE_HOME,
     CONF_PREALARM_LEAD_SEC,
@@ -53,6 +60,8 @@ from .const import (
     DEFAULT_PREALARM_LEAD_SEC,
     DEFAULT_PREMUTE_SEC,
     DEFAULT_RAMP_MIN,
+    DEFAULT_AWAKE_DEBOUNCE_SEC,
+    DEFAULT_AWAKE_STOP,
     DEFAULT_REQUIRE_HOME,
     DEFAULT_SNOOZE_FADE_SEC,
     DEFAULT_SNOOZE_MAX,
@@ -68,6 +77,7 @@ _PERSON = selector.EntitySelector(selector.EntitySelectorConfig(domain="person")
 _LIGHT = selector.EntitySelector(selector.EntitySelectorConfig(domain="light"))
 _SPEAKER = selector.EntitySelector(selector.EntitySelectorConfig(domain="media_player"))
 _ALARM = selector.EntitySelector(selector.EntitySelectorConfig(domain="sensor"))
+_BINARY = selector.EntitySelector(selector.EntitySelectorConfig(domain="binary_sensor"))
 _TEXT = selector.TextSelector()
 
 
@@ -125,6 +135,8 @@ _OPTION_DEFAULTS: dict[str, Any] = {
     CONF_PREMUTE_SEC: DEFAULT_PREMUTE_SEC,
     CONF_ESCALATE: DEFAULT_ESCALATE,
     CONF_REQUIRE_HOME: DEFAULT_REQUIRE_HOME,
+    CONF_AWAKE_STOP: DEFAULT_AWAKE_STOP,
+    CONF_AWAKE_DEBOUNCE_SEC: DEFAULT_AWAKE_DEBOUNCE_SEC,
     CONF_FAILSAFE_EXTRA_MIN: DEFAULT_FAILSAFE_EXTRA_MIN,
     CONF_WINDOW_START: f"{DEFAULT_WINDOW_START}:00",
     CONF_WINDOW_END: f"{DEFAULT_WINDOW_END}:00",
@@ -160,6 +172,15 @@ def _options_schema() -> vol.Schema:
             vol.Required(CONF_PREMUTE_SEC): _num(0, 600, 5, "s"),
             vol.Required(CONF_ESCALATE): selector.BooleanSelector(),
             vol.Required(CONF_REQUIRE_HOME): selector.BooleanSelector(),
+            # Auto-dismiss when the person is clearly up (Companion sensors;
+            # the person flow fills these in, overridable here).
+            vol.Required(CONF_AWAKE_STOP): selector.BooleanSelector(),
+            vol.Required(CONF_AWAKE_DEBOUNCE_SEC): _num(5, 300, 5, "s"),
+            vol.Optional(CONF_AWAKE_LOCKED): _BINARY,
+            vol.Optional(CONF_AWAKE_INTERACTIVE): _BINARY,
+            vol.Optional(CONF_AWAKE_CHARGING): _BINARY,
+            vol.Optional(CONF_AWAKE_STEPS): _ALARM,
+            vol.Optional(CONF_AWAKE_ACTIVITY): _ALARM,
             vol.Required(CONF_FAILSAFE_EXTRA_MIN): _num(0, 60, 1, "min"),
             vol.Required(CONF_WINDOW_START): selector.TimeSelector(),
             vol.Required(CONF_WINDOW_END): selector.TimeSelector(),

@@ -4,6 +4,25 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] - 2026-10-28
+
+### Fixed
+- **The `active` flag now clears when the sunrise ramp finishes normally**
+  ([#2](https://github.com/rationalRobots/haos-sunrise-alarm/issues/2)).
+  Previously it only cleared on an explicit dismiss/stop, so a wake you simply
+  got up from left the flag set and **blocked the next morning's run** ("a run
+  is already active"). A self-heal also drops a stale flag that has no running
+  routine behind it (e.g. after an HA restart mid-run).
+
+### Added
+- **Stop automatically when you're up and moving** (`awake_stop`, default off).
+  While a wake is running, the routine auto-dismisses (music stops, lamp stays
+  on) once the phone is **unlocked and interactive and off the charger** and
+  **either steps are rising or detected activity is walking/running**, held for
+  `awake_debounce_sec` (default 30 s). Any missing sensor fails the test, so it
+  never cuts a wake by accident. The person flow wires the Companion sensors
+  automatically; they are overridable in options.
+
 ## [0.6.1] - 2026-10-19
 
 ### Added
