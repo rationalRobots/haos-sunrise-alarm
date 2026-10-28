@@ -57,9 +57,11 @@ With **`awake_stop`** (default off) the running wake dismisses itself once you
 are clearly up: phone **unlocked and interactive and off the charger**, and
 **either your step count is climbing or detected activity is walking/running**,
 held for `awake_debounce_sec`. Music stops, the lamp stays on. Every sensor must
-report, so a half-configured profile never auto-stops. This also means you never
-have to tap *Dismiss* — which is what previously left the wake "active" and
-blocked the next morning.
+report. The lock, interactive and charging sensors are all required (a missing
+one fails the check), and at least one movement signal — steps or activity —
+must indicate motion. This also means you rarely tap *Dismiss* by hand; a
+dismiss (by hand or automatic) also stands the phone-mute layer down for the
+day, so your phone alarm just rings as the backstop.
 
 > The Companion app ships the **Interactive** and **Detected activity** sensors
 > *disabled*; enable them under the app's sensor settings or `awake_stop` stays

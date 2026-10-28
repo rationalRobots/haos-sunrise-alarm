@@ -166,6 +166,8 @@ class SunriseAlarmController:
         # Awake-detection: debounce task and the step count at run start.
         self._awake_task: asyncio.Task | None = None
         self._steps_baseline: float | None = None
+        # Date of the last dismiss, to stand the phone layer down for the day.
+        self._dismissed_date: str | None = None
         # Date (YYYY-MM-DD) on which the person chose 'stop for today'.
         self._stopped_date: str | None = None
         # Last main notification, re-sent when a menu is backed out of.
@@ -479,22 +481,28 @@ class SunriseAlarmController:
             return False
         return self.person_home() is False
 
-    def _clear_stale_active(self) -> None:
-        """Drop an 'active' flag with no running routine behind it.
-
-        Belt-and-braces for #2: if a run is marked active but neither the
-        sunrise task nor a snooze is live (e.g. HA was killed mid-run, or an
-        older build latched the flag), treat it as finished.
-        """
-        if not self.active:
-            return
+    def _routine_busy(self) -> bool:
+        """True while a sunrise ramp or a snooze timer is actually live."""
         run_live = self._run_task is not None and not self._run_task.done()
         snooze_live = self._snooze_task is not None and not self._snooze_task.done()
-        if not run_live and not snooze_live:
-            self.active = False
-            _LOGGER.warning(
-                "%s: cleared a stale 'active' flag (no running routine)", self.name
-            )
+        return run_live or snooze_live
+
+    def _clear_stale_active(self) -> None:
+        """Drop an 'active' flag left over from a PRIOR day.
+
+        Only clears when no session has run today (so a same-day session,
+        including the post-ramp 'waiting for you to get up' window and the
+        awaits inside snooze, keeps its flag) and nothing is live. This tidies
+        _session_live for the phone layer; start-blocking uses _routine_busy.
+        """
+        if not self.active or self._routine_busy():
+            return
+        if self._last_run_date == dt_util.now().strftime("%Y-%m-%d"):
+            return
+        self.active = False
+        _LOGGER.warning(
+            "%s: cleared a stale 'active' flag from a previous day", self.name
+        )
 
     # -- awake detection -----------------------------------------------------
     def _state_is(self, conf_key: str, want: str) -> bool:
@@ -573,15 +581,23 @@ class SunriseAlarmController:
             task.cancel()
 
     def _session_live(self) -> bool:
-        """True if a run is active or already ran today, and was not stopped.
-
-        The phone-side timers key off this, so a deliberate stop stands them
-        down too: the phone alarm then rings as the normal backstop.
-        """
+        """True if a run is active or already ran today, and was not stopped."""
         if self.stopped_today:
             return False
         today = dt_util.now().strftime("%Y-%m-%d")
         return self.active or self._last_run_date == today
+
+    def _phone_layer_live(self) -> bool:
+        """Whether pre-mute / firing / escalate should act.
+
+        A dismiss (manual, awake, or snooze-cap) stands the phone layer down
+        for the rest of the day unless a fresh run goes active: the person is
+        up, so the phone alarm just rings as the backstop (see #8).
+        """
+        today = dt_util.now().strftime("%Y-%m-%d")
+        if self._dismissed_date == today and not self.active:
+            return False
+        return self._session_live()
 
     @callback
     def _handle_prealarm(self, _now: datetime) -> None:
@@ -613,7 +629,7 @@ class SunriseAlarmController:
             self._skip("profile is disabled", logging.INFO)
             return
         self._clear_stale_active()
-        if self.active:
+        if self._routine_busy():
             self._skip("a run is already active")
             return
         if self.stopped_today:
@@ -635,6 +651,7 @@ class SunriseAlarmController:
         await self._cancel_run()
         self._suppress_next = False
         self.active = True
+        self._dismissed_date = None
         self._steps_baseline = self._num_state(CONF_AWAKE_STEPS)
         self._signal()
         ramp = ramp_min if ramp_min is not None else int(
@@ -655,13 +672,11 @@ class SunriseAlarmController:
             )
         except asyncio.CancelledError:
             raise
-        else:
-            # Ramp finished on its own. The wake is over, so drop the flag;
-            # leaving it set used to block the next morning's run (#2). Snooze
-            # and dismiss take the cancel path above and keep ownership.
-            self.active = False
-            self._signal()
         finally:
+            # Leave `active` set: the lamp is up and the music is playing, so
+            # the wake session is still on (awake-detection and snooze-pause
+            # depend on it). What must not persist is start-blocking, which now
+            # keys off a live task, not this flag (see _routine_busy / #2).
             self._run_task = None
 
     async def _light_branch(self, ramp_min: int) -> None:
@@ -841,8 +856,12 @@ class SunriseAlarmController:
             self._cancel_timer("point")
             self._suppress_next = False
             self._mark_run_today()
+        self._dismissed_date = dt_util.now().strftime("%Y-%m-%d")
+        for key in ("premute", "firing", "failsafe"):
+            self._cancel_timer(key)
         self._cancel_snooze()
         await self._cancel_run()
+        await self._cancel_phone_tasks()
         await self._cancel_hold()
         self.active = False
         self.snooze_count = 0
@@ -1018,7 +1037,7 @@ class SunriseAlarmController:
     @callback
     def _handle_premute(self, _now: datetime) -> None:
         self._unsubs["premute"] = None
-        if not self.enabled or self._suppress_next or not self._session_live():
+        if not self.enabled or self._suppress_next or not self._phone_layer_live():
             return
         self._phone_task(self._premute())
 
@@ -1034,7 +1053,7 @@ class SunriseAlarmController:
     @callback
     def _handle_firing_time(self, _now: datetime) -> None:
         self._unsubs["firing"] = None
-        if not self.enabled or not self._session_live():
+        if not self.enabled or not self._phone_layer_live():
             return
         self._phone_task(self._on_firing())
 
@@ -1054,7 +1073,7 @@ class SunriseAlarmController:
     @callback
     def _handle_notification(self, event) -> None:
         """React to the phone's own alarm firing/snooze notification channels."""
-        if not self.enabled or not self._session_live():
+        if not self.enabled or not self._phone_layer_live():
             return
         new = event.data.get("new_state")
         if new is None:

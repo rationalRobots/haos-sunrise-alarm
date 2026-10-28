@@ -336,19 +336,28 @@ AWAKE_UP = {
 
 async def issue2():
     now = dt_util.now().replace(microsecond=0)
-    # Ramp finishes on its own -> active clears (the #2 fix)
+    today = now.strftime("%Y-%m-%d")
+    yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    # Ramp finishes on its own -> active STAYS set (wake session still on),
+    # _run_task cleared. Start-blocking no longer depends on this flag.
     with patch.object(co.asyncio, "sleep", AsyncMock()):
         c = make({"ramp_min": 1}, (now + timedelta(minutes=40)).isoformat())
         await c.async_start_run()
         assert c.active
         t = c._run_task
         await t
-        assert not c.active and c._run_task is None
-    # Stale active with no run -> self-heal clears it
+        assert c.active and c._run_task is None
+    # A flag left from a PRIOR day is cleared; a flag from today is kept.
     c = make({}, (now + timedelta(minutes=40)).isoformat())
     c.active = True; c._run_task = None; c._snooze_task = None
+    c._last_run_date = yesterday
     c._clear_stale_active()
     assert not c.active
+    c = make({}, (now + timedelta(minutes=40)).isoformat())
+    c.active = True; c._run_task = None; c._snooze_task = None
+    c._last_run_date = today
+    c._clear_stale_active()
+    assert c.active, "same-day flag wrongly cleared (would break awake/snooze)"
     # _run_task is assigned before the start notification (race guard)
     with patch.object(co.asyncio, "sleep", AsyncMock()):
         c = make({"ramp_min": 1}, (now + timedelta(minutes=40)).isoformat())
@@ -362,21 +371,35 @@ async def issue2():
         assert seen.get("run_task_set") is True
         if c._run_task:
             await c._run_task
-    # A live run is never cleared as "stale"
-    c = make({}, (now + timedelta(minutes=40)).isoformat())
-    c.active = True
-    c._run_task = asyncio.ensure_future(asyncio.sleep(0))
-    c._clear_stale_active()
-    assert c.active
-    await c._run_task
-    # Stale active does not block the scheduled start
-    # Stale active does not block the scheduled start
+    # A live run blocks a second start; a stale prior-day flag does not.
     with patch.object(co, "async_track_point_in_time", return_value=lambda: None):
         c = make({}, (now + timedelta(minutes=40)).isoformat())
         c.async_start_run = AsyncMock()
-        c.active = True; c._run_task = None; c._snooze_task = None
+        c.active = True; c._last_run_date = yesterday
+        c._run_task = None; c._snooze_task = None
         c._reschedule(); c._handle_start(now); await asyncio.sleep(0)
-        assert c.async_start_run.await_count == 1
+        assert c.async_start_run.await_count == 1 and not c.last_skip_reason
+        # live routine -> blocked
+        c = make({}, (now + timedelta(minutes=40)).isoformat())
+        c.async_start_run = AsyncMock()
+        c._run_task = asyncio.ensure_future(asyncio.sleep(3600))
+        c._reschedule(); c._handle_start(now); await asyncio.sleep(0)
+        assert c.async_start_run.await_count == 0 and c.last_skip_reason == "a run is already active"
+        c._run_task.cancel()
+    # Dismiss stands the phone layer down for the day (#8 interaction)
+    c = make({}, (now + timedelta(minutes=40)).isoformat())
+    c.active = True; c._last_run_date = today
+    for k in ("premute", "firing", "failsafe"):
+        c._unsubs[k] = lambda: None
+    await c.async_dismiss()
+    assert c._dismissed_date == today
+    assert all(c._unsubs[k] is None for k in ("premute", "firing", "failsafe"))
+    assert not c._phone_layer_live()
+    c.async_mute_phone = AsyncMock(); c.async_escalate = AsyncMock()
+    c._handle_firing_time(now)
+    for _ in range(3):
+        await asyncio.sleep(0)
+    assert c.async_mute_phone.await_count == 0 and c.async_escalate.await_count == 0
     print("issue2: ok")
 
 
