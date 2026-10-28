@@ -640,10 +640,13 @@ class SunriseAlarmController:
         ramp = ramp_min if ramp_min is not None else int(
             self.opt(CONF_RAMP_MIN, DEFAULT_RAMP_MIN)
         )
+        # Assign the task before the notify await: otherwise active is True with
+        # _run_task still None across the await, and a reschedule slipping in
+        # would see a "stale" flag and clear it mid-run.
+        self._run_task = self.hass.async_create_task(self._async_sunrise(ramp))
         await self._notify_main(
             title=f"Good morning, {self.name}", message="Sunrise wake starting."
         )
-        self._run_task = self.hass.async_create_task(self._async_sunrise(ramp))
 
     async def _async_sunrise(self, ramp_min: int) -> None:
         try:

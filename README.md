@@ -61,6 +61,10 @@ report, so a half-configured profile never auto-stops. This also means you never
 have to tap *Dismiss* — which is what previously left the wake "active" and
 blocked the next morning.
 
+> The Companion app ships the **Interactive** and **Detected activity** sensors
+> *disabled*; enable them under the app's sensor settings or `awake_stop` stays
+> inert (it fails closed on any missing sensor).
+
 Per-profile timings live under the profile's **Configure** (options): lead time,
 sunrise duration, max brightness, start/end colour temperature, audio media id
 and type, audio delay, max volume, snooze duration and cap, and the morning

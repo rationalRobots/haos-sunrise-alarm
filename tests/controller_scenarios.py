@@ -349,6 +349,27 @@ async def issue2():
     c.active = True; c._run_task = None; c._snooze_task = None
     c._clear_stale_active()
     assert not c.active
+    # _run_task is assigned before the start notification (race guard)
+    with patch.object(co.asyncio, "sleep", AsyncMock()):
+        c = make({"ramp_min": 1}, (now + timedelta(minutes=40)).isoformat())
+        seen = {}
+        orig = c._notify_main
+        async def spy(*a, **k):
+            seen["run_task_set"] = c._run_task is not None
+            return await orig(*a, **k)
+        c._notify_main = spy
+        await c.async_start_run()
+        assert seen.get("run_task_set") is True
+        if c._run_task:
+            await c._run_task
+    # A live run is never cleared as "stale"
+    c = make({}, (now + timedelta(minutes=40)).isoformat())
+    c.active = True
+    c._run_task = asyncio.ensure_future(asyncio.sleep(0))
+    c._clear_stale_active()
+    assert c.active
+    await c._run_task
+    # Stale active does not block the scheduled start
     # Stale active does not block the scheduled start
     with patch.object(co, "async_track_point_in_time", return_value=lambda: None):
         c = make({}, (now + timedelta(minutes=40)).isoformat())
