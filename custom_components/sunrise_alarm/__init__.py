@@ -71,7 +71,10 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     closed, so any sensor it can't resolve simply leaves that profile's
     detection partial rather than misfiring.
     """
-    if entry.version >= 2:
+    if entry.version > 2:
+        # Written by a newer version; this code can't safely downgrade it.
+        return False
+    if entry.version == 2:
         return True
     options = dict(entry.options)
     slug = _phone_slug({**entry.data, **options})
