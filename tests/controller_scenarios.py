@@ -448,7 +448,65 @@ async def awake():
     print("awake: ok")
 
 
+async def migration():
+    import custom_components.sunrise_alarm as sa
+
+    def ent(entity_id, device_id="dev1"):
+        m = MagicMock(); m.entity_id = entity_id; m.device_id = device_id
+        return m
+
+    DEV = [
+        ent("binary_sensor.s24u_device_locked"), ent("binary_sensor.s24u_interactive"),
+        ent("binary_sensor.s24u_is_charging"), ent("sensor.s24u_daily_steps"),
+        ent("sensor.s24u_detected_activity"), ent("sensor.s24u_next_alarm"),
+    ]
+    reg = MagicMock()
+    reg.async_get = lambda eid: ent("sensor.s24u_next_alarm") if eid == "sensor.s24u_next_alarm" else None
+    hass = MagicMock()
+    cap = {}
+    hass.config_entries.async_update_entry = lambda e, **kw: cap.update(kw)
+    entry = MagicMock(); entry.version = 1
+    entry.data = {"alarm_sensor": "sensor.s24u_next_alarm"}; entry.options = {}
+    with patch.object(sa.er, "async_get", return_value=reg), \
+         patch.object(sa.er, "async_entries_for_device", return_value=DEV):
+        ok = await sa.async_migrate_entry(hass, entry)
+    assert ok and cap["version"] == 2
+    o = cap["options"]
+    assert o["awake_stop"] is True
+    assert o["awake_locked_sensor"] == "binary_sensor.s24u_device_locked"
+    assert o["awake_steps_sensor"] == "sensor.s24u_daily_steps"
+    assert o["awake_activity_sensor"] == "sensor.s24u_detected_activity"
+    # A sensor missing from the device is left unset (fail closed)
+    DEV2 = [e for e in DEV if "interactive" not in e.entity_id]
+    cap2 = {}
+    hass.config_entries.async_update_entry = lambda e, **kw: cap2.update(kw)
+    entry2 = MagicMock(); entry2.version = 1
+    entry2.data = {"alarm_sensor": "sensor.s24u_next_alarm"}; entry2.options = {}
+    with patch.object(sa.er, "async_get", return_value=reg), \
+         patch.object(sa.er, "async_entries_for_device", return_value=DEV2):
+        await sa.async_migrate_entry(hass, entry2)
+    assert "awake_interactive_sensor" not in cap2["options"] and cap2["options"]["awake_stop"] is True
+    # No phone device resolvable -> only the toggle is set
+    cap3 = {}
+    hass.config_entries.async_update_entry = lambda e, **kw: cap3.update(kw)
+    entry3 = MagicMock(); entry3.version = 1; entry3.data = {}; entry3.options = {}
+    reg_none = MagicMock(); reg_none.async_get = lambda eid: None
+    with patch.object(sa.er, "async_get", return_value=reg_none):
+        await sa.async_migrate_entry(hass, entry3)
+    assert cap3["options"] == {"awake_stop": True}
+    # Already v2 -> no-op; future version -> refused
+    assert await sa.async_migrate_entry(MagicMock(), _ver(2)) is True
+    assert await sa.async_migrate_entry(MagicMock(), _ver(3)) is False
+    print("migration: ok")
+
+
+def _ver(n):
+    m = MagicMock(); m.version = n
+    return m
+
+
 async def main():
+    await migration()
     await scheduling()
     await notifications()
     await presence()
