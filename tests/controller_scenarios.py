@@ -448,7 +448,46 @@ async def awake():
     print("awake: ok")
 
 
+async def migration():
+    import custom_components.sunrise_alarm as sa
+    # Slug recovery from a wired companion sensor
+    assert sa._phone_slug({"alarm_sensor": "sensor.s24u_next_alarm"}) == "s24u"
+    assert sa._phone_slug({"phone_state_sensor": "sensor.pixel7_phone_state"}) == "pixel7"
+    assert sa._phone_slug({}) is None
+    # v1 -> v2 wires the derived sensors (those that exist) and enables the feature
+    entry = MagicMock(); entry.version = 1
+    entry.data = {"alarm_sensor": "sensor.s24u_next_alarm"}; entry.options = {}
+    hass = MagicMock()
+    captured = {}
+    hass.config_entries.async_update_entry = lambda e, **kw: captured.update(kw)
+    reg = MagicMock(); reg.async_get = lambda eid: object()  # everything exists
+    with patch.object(sa.er, "async_get", return_value=reg):
+        ok = await sa.async_migrate_entry(hass, entry)
+    assert ok and captured.get("version") == 2
+    o = captured["options"]
+    assert o["awake_stop"] is True
+    assert o["awake_locked_sensor"] == "binary_sensor.s24u_device_locked"
+    assert o["awake_steps_sensor"] == "sensor.s24u_daily_steps"
+    assert o["awake_activity_sensor"] == "sensor.s24u_detected_activity"
+    # A sensor that doesn't exist is left unset (fail closed)
+    entry2 = MagicMock(); entry2.version = 1
+    entry2.data = {"alarm_sensor": "sensor.s24u_next_alarm"}; entry2.options = {}
+    cap2 = {}
+    hass.config_entries.async_update_entry = lambda e, **kw: cap2.update(kw)
+    reg2 = MagicMock()
+    reg2.async_get = lambda eid: None if "interactive" in eid else object()
+    with patch.object(sa.er, "async_get", return_value=reg2):
+        await sa.async_migrate_entry(hass, entry2)
+    assert "awake_interactive_sensor" not in cap2["options"]
+    assert cap2["options"]["awake_stop"] is True
+    # Already v2 -> no-op
+    entry3 = MagicMock(); entry3.version = 2
+    assert await sa.async_migrate_entry(MagicMock(), entry3) is True
+    print("migration: ok")
+
+
 async def main():
+    await migration()
     await scheduling()
     await notifications()
     await presence()

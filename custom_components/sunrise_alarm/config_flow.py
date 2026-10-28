@@ -191,7 +191,7 @@ def _options_schema() -> vol.Schema:
 class SunriseAlarmConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle the initial setup of a wake profile (person-centric)."""
 
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self) -> None:
         """Init the flow's carry-over state."""

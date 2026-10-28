@@ -4,6 +4,16 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.7.1] - 2026-10-28
+
+### Changed
+- **Existing profiles are migrated to enable "stop when I'm up"** with the
+  Companion sensors auto-wired (derived from the phone already configured on
+  the profile and verified against the entity registry). New in 0.7.0 but
+  unreachable on upgraded profiles without re-running setup; this closes that
+  gap. The feature fails closed, so a profile whose phone lacks the sensors is
+  unaffected. Turn it off in the profile's options if you don't want it.
+
 ## [0.7.0] - 2026-10-28
 
 ### Fixed
